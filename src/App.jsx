@@ -708,13 +708,14 @@ const RANGES=["MTD","Last 30D","Last Month","YTD"];
 
 export default function App() {
   const [authed,setAuthed]=useState(!!localStorage.getItem("rc_authed"));
-  const [hasUrl,setHasUrl]=useState(!!localStorage.getItem("rc_apps_script_url"));
+  const [hasUrl,setHasUrl]=useState(true);
   const [metrics,setMetrics]=useState(null);
   const [tab,setTab]=useState("performance");
   const [range,setRange]=useState("MTD");
   const [syncing,setSyncing]=useState(false);
   const [lastSync,setLastSync]=useState(null);
   const timerRef=useRef(null);
+  const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxG9t2h7Wl-EzTFGWJP7P9NvRZ--H05TMmxuwwafNgMCm-9vPy7CrMIJImwqukDKwZE/exec";
   const handleAuth=()=>{localStorage.setItem("rc_authed","1");setAuthed(true);};
   const handleLoad=useCallback((url,text)=>{
     try{
@@ -728,7 +729,7 @@ export default function App() {
     setHasUrl(true);
   },[]);
   const refresh=useCallback(async()=>{
-    const url=localStorage.getItem("rc_apps_script_url");
+    const url=APPS_SCRIPT_URL;
     if(!url) return;
     setSyncing(true);
     try{const rp=range==="MTD"?"mtd":range==="Last 30D"?"last30":range==="Last Month"?"lastmonth":"ytd";const res=await fetch(`${url}?range=${rp}`);const text=await res.text();handleLoad(url,text);}catch(e){console.error(e);}
@@ -737,7 +738,6 @@ export default function App() {
   useEffect(()=>{if(authed&&hasUrl&&!metrics)refresh();},[authed,hasUrl,metrics,refresh]);
   useEffect(()=>{if(!authed||!hasUrl)return;timerRef.current=setInterval(refresh,30000);return()=>clearInterval(timerRef.current);},[authed,hasUrl,refresh]);
   if(!authed) return <PasswordScreen onAuth={handleAuth}/>;
-  if(!hasUrl) return <SetupScreen onLoad={handleLoad}/>;
   return(
     <>
       <style>{css}</style>
@@ -752,7 +752,7 @@ export default function App() {
               {RANGES.map(r=>{const av=r==="MTD";return(<button key={r} onClick={()=>av&&setRange(r)} style={{padding:"5px 12px",fontSize:11,fontFamily:FONT,borderRadius:6,cursor:av?"pointer":"not-allowed",border:`1px solid ${range===r?T.blue:T.line1}`,background:range===r?T.blue+"22":"transparent",color:range===r?T.blue:T.text2,opacity:av?1:0.35,transition:"all .15s"}}>{r}{!av?" 🔒":""}</button>);})}
             </div>
             <button onClick={refresh} disabled={syncing} style={{padding:"5px 12px",fontSize:11,fontFamily:FONT,borderRadius:6,border:`1px solid ${T.line1}`,background:"transparent",color:T.text2,cursor:"pointer"}}><i className={`ti ${syncing?"ti-loader-2":"ti-refresh"}`} style={{fontSize:13}}/></button>
-            <button onClick={()=>{localStorage.removeItem("rc_apps_script_url");setHasUrl(false);setMetrics(null);clearInterval(timerRef.current);}} style={{padding:"5px 10px",fontSize:11,fontFamily:FONT,borderRadius:6,border:`1px solid ${T.line1}`,background:"transparent",color:T.text2,cursor:"pointer"}}>Change Sheet</button>
+
           </div>
         </div>
         <div style={{display:"flex",gap:6,marginBottom:14,flexWrap:"wrap"}}>
