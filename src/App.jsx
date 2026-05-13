@@ -1030,15 +1030,20 @@ export default function App() {
   const handleAuth = () => { localStorage.setItem("rc_authed", "1"); setAuthed(true); };
 
   const handleLoad = useCallback((url, text) => {
-    // Check if response is JSON error
-    try {
-      const json = JSON.parse(text);
-      if (json.error) { console.error("Apps Script error:", json.error); return; }
-    } catch (e) { /* not JSON, proceed as CSV */ }
-
     setRawText(text);
     try {
-      const rows = parseCSV(text);
+      let rows = [];
+      // Try JSON format first (Apps Script returning JSON)
+      try {
+        const json = JSON.parse(text);
+        if (json.error) { console.error("Apps Script error:", json.error); return; }
+        if (json.rows && Array.isArray(json.rows)) {
+          rows = json.rows;
+        }
+      } catch (e) {
+        // Not JSON, try CSV/TSV
+        rows = parseCSV(text);
+      }
       if (!rows.length) return;
       const headers = Object.keys(rows[0]);
       const cols = detectCols(headers);
