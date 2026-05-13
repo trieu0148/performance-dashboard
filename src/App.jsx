@@ -93,7 +93,11 @@ function compute(rows,cols) {
   const enrichSku=p=>{
     const margin=p.margins.length?p.margins.reduce((a,b)=>a+b,0)/p.margins.length:null;
     const adSpend=p.ggSpend+p.fbSpend,adRevenue=p.revenueGG+p.revenueFB,adUnits=p.unitsGG+p.unitsFB;
-    const beRoas=margin>0?1/margin:null,roas=adSpend>0?adRevenue/adSpend:null;
+    // BE ROAS = MAP Price / (MAP Price - Cost)
+    const beRoas=(p.price>0&&p.cost>0&&p.price>p.cost)?p.price/(p.price-p.cost):margin>0?1/margin:null;
+    // Max CPA = MAP Price - Cost
+    const maxCpa=(p.price>0&&p.cost>0)?p.price-p.cost:null;
+    const roas=adSpend>0?adRevenue/adSpend:null;
     const cpa=adUnits>0?adSpend/adUnits:null;
     const ggRoas=p.ggSpend>0?p.revenueGG/p.ggSpend:null,fbRoas=p.fbSpend>0?p.revenueFB/p.fbSpend:null;
     const ggCpa=p.unitsGG>0?p.ggSpend/p.unitsGG:null,fbCpa=p.unitsFB>0?p.fbSpend/p.unitsFB:null;
@@ -106,7 +110,7 @@ function compute(rows,cols) {
     const ggConvRate=p.sessionsGG>0?p.unitsGG/p.sessionsGG:null;
     const fbConvRate=p.sessionsFB>0?p.unitsFB/p.sessionsFB:null;
     const ggCtr=p.ggImp>0?p.ggClick/p.ggImp:null,fbCtr=p.fbImp>0?p.fbClicks/p.fbImp:null;
-    return {...p,margin,adSpend,adRevenue,adUnits,beRoas,roas,cpa,ggRoas,fbRoas,ggCpa,fbCpa,
+    return {...p,margin,adSpend,adRevenue,adUnits,beRoas,maxCpa,roas,cpa,ggRoas,fbRoas,ggCpa,fbCpa,
       ggCpaPlat,ggRoasPlat,ggCrPlat,atcRate,checkRate,convRate,ggConvRate,fbConvRate,ggCtr,fbCtr};
   };
   const skuList=Object.values(skuMap).map(enrichSku);
@@ -147,7 +151,6 @@ function compute(rows,cols) {
   }).sort((a,b)=>b.revenue-a.revenue);
   const brandList=allBrands.slice(0,10);
 
-  // 5-group quadrant — median only from SKUs with revenue > 0
   const posRevs=skuList.map(p=>p.revenue).filter(v=>v>0).sort((a,b)=>a-b);
   const revMedian=posRevs[Math.floor(posRevs.length/2)]||0;
   const quadrant=p=>{
@@ -208,6 +211,8 @@ const Empty=({icon="ti-database-off",msg="No data"})=>(<div style={{textAlign:"c
 const NavTab=({label,icon,active,onClick})=>(<button onClick={onClick} className="tab-btn" style={{display:"flex",alignItems:"center",gap:6,padding:"7px 14px",fontSize:12,fontFamily:FONT,borderRadius:8,border:`1px solid ${active?T.blue:T.line1}`,cursor:"pointer",background:active?T.blue:"transparent",color:active?"#fff":T.text1,transition:"all .15s"}}><i className={`ti ${icon}`} style={{fontSize:13}}/>{label}</button>);
 const SubTab=({label,active,onClick})=>(<button onClick={onClick} style={{padding:"5px 12px",fontSize:11,fontFamily:FONT,borderRadius:6,border:`1px solid ${active?T.cyan:T.line1}`,cursor:"pointer",background:active?T.cyan+"22":"transparent",color:active?T.cyan:T.text2,transition:"all .15s"}}>{label}</button>);
 const BrandLabel=({label})=>{const map={star:["⭐ Star",T.green],cashcow:["💰 Cash Cow",T.yellow],gem:["💎 Hidden Gem",T.cyan],risk:["⚠️ At Risk",T.red]};const[text,color]=map[label]||["—",T.text2];return <Tag color={color}>{text}</Tag>;};
+const rateColor=(v,low,mid)=>v==null?T.text2:v<low?T.red:v<mid?T.yellow:T.green;
+const rc=v=>rateColor(v,0.05,0.10);
 
 function getAction(p){
   if(p.stock<=0) return{icon:"🚨",text:"Out of stock — restock now",color:T.red};
@@ -215,16 +220,11 @@ function getAction(p){
   if(p.sessions<10&&p.adSpend>0) return{icon:"🎯",text:"Review targeting — low reach",color:T.purple};
   if(p.sessions>=10&&(p.atcRate||0)<0.05&&p.stock>0) return{icon:"🖼️",text:"Improve product page",color:T.yellow};
   if((p.atcRate||0)>=0.05&&(p.convRate||0)<0.01&&p.stock>0) return{icon:"💳",text:"Check checkout flow",color:T.yellow};
-  if(p.cpa>p.price&&p.stock>0) return{icon:"🛑",text:"Pause ads — CPA > price",color:T.red};
+  if(p.maxCpa&&p.cpa>p.maxCpa&&p.stock>0) return{icon:"🛑",text:"Pause ads — CPA > Max CPA",color:T.red};
   if(p.beRoas&&p.roas<p.beRoas&&p.stock>0) return{icon:"✂️",text:"Reduce bid",color:T.orange};
   return{icon:"✅",text:"On track",color:T.green};
 }
 
-// ── Rate color with custom benchmarks ────────────────────────────────────────
-const rateColor=(v,low,mid)=>v==null?T.text2:v<low?T.red:v<mid?T.yellow:T.green;
-const rc=(v)=>rateColor(v,0.05,0.10); // default
-
-// ── Search Modal ──────────────────────────────────────────────────────────────
 const SearchModal=({title,color,allItems,cols,onClose})=>{
   const [q,setQ]=useState("");
   const filtered=allItems.filter(p=>(p.name||p.sku||"").toLowerCase().includes(q.toLowerCase()));
@@ -232,7 +232,7 @@ const SearchModal=({title,color,allItems,cols,onClose})=>{
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal-box" onClick={e=>e.stopPropagation()}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
-          <div style={{fontSize:14,fontWeight:600,color:color||T.text0}}>{title} <span style={{fontSize:12,color:T.text2,fontWeight:400}}>({filtered.length} / {allItems.length})</span></div>
+          <div style={{fontSize:14,fontWeight:600,color:color||T.text0}}>{title} <span style={{fontSize:12,color:T.text2,fontWeight:400}}>({filtered.length}/{allItems.length})</span></div>
           <button onClick={onClose} style={{background:"none",border:"none",color:T.text2,cursor:"pointer",fontSize:18}}><i className="ti ti-x"/></button>
         </div>
         <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Search product..."
@@ -268,15 +268,14 @@ const FunnelViz=({sessions,atc,checkout,units})=>{
   return(<div style={{display:"flex",flexDirection:"column",gap:8}}>{steps.map((s,i)=>{const drop=i>0?((steps[i-1].value-s.value)/steps[i-1].value):0;return(<div key={i}><div style={{display:"flex",alignItems:"center",gap:8}}><div style={{width:90,fontSize:11,color:T.text2}}>{s.label}</div><HBar value={s.value} max={max} color={s.color} h={8}/><div style={{width:60,textAlign:"right",fontSize:12,fontFamily:MONO,color:T.text0}}>{fNum(s.value)}</div>{i>0&&<div style={{width:50,textAlign:"right",fontSize:11,color:drop>0.5?T.red:T.text2}}>-{fPct(drop)}</div>}</div></div>);})}</div>);
 };
 
-// ── Funnel Leak Table with modal + search + custom benchmarks ─────────────────
 const FunnelLeakTable=({title,tooltip,items,col1,col1label,rateKey,rateLabel,low,mid})=>{
   const [showModal,setShowModal]=useState(false);
-  const rc=v=>rateColor(v,low,mid);
+  const rcl=v=>rateColor(v,low,mid);
   const cols=[
     {k:"name",label:"Product",wrap:true},
     {k:col1,label:col1label,r:true,render:p=>fNum(p[col1])},
     {k:"stock",label:"Stock",r:true,render:p=><span style={{color:p.stock<=0?T.red:p.stock<=5?T.orange:T.text2}}>{fNum(p.stock)}</span>},
-    {k:rateKey,label:rateLabel,r:true,render:p=><span style={{color:rc(p[rateKey]),fontWeight:600}}>{fPct(p[rateKey])}</span>},
+    {k:rateKey,label:rateLabel,r:true,render:p=><span style={{color:rcl(p[rateKey]),fontWeight:600}}>{fPct(p[rateKey])}</span>},
     {k:"revenue",label:"Revenue",r:true,render:p=>fUsd(p.revenue)},
   ];
   return(
@@ -292,15 +291,11 @@ const FunnelLeakTable=({title,tooltip,items,col1,col1label,rateKey,rateLabel,low
                 <div style={{fontSize:11,color:T.text0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p.name||p.sku}</div>
                 <div style={{fontSize:11,color:T.text2,textAlign:"right",fontFamily:MONO}}>{fNum(p[col1])}</div>
                 <div style={{fontSize:11,color:p.stock<=0?T.red:p.stock<=5?T.orange:T.text2,textAlign:"right",fontFamily:MONO}}>{fNum(p.stock)}</div>
-                <div style={{fontSize:11,fontWeight:600,color:rc(p[rateKey]),textAlign:"right"}}>{fPct(p[rateKey])}</div>
+                <div style={{fontSize:11,fontWeight:600,color:rcl(p[rateKey]),textAlign:"right"}}>{fPct(p[rateKey])}</div>
                 <div style={{fontSize:11,color:T.text2,textAlign:"right",fontFamily:MONO}}>{fUsd(p.revenue)}</div>
               </div>
             ))}
-            {items.length>10&&(
-              <button onClick={()=>setShowModal(true)} style={{marginTop:8,fontSize:11,color:T.cyan,background:"none",border:`1px solid ${T.cyan}33`,borderRadius:6,padding:"3px 10px",cursor:"pointer",fontFamily:FONT}}>
-                +{items.length-10} more
-              </button>
-            )}
+            {items.length>10&&(<button onClick={()=>setShowModal(true)} style={{marginTop:8,fontSize:11,color:T.cyan,background:"none",border:`1px solid ${T.cyan}33`,borderRadius:6,padding:"3px 10px",cursor:"pointer",fontFamily:FONT}}>+{items.length-10} more</button>)}
           </>
         ):<Empty msg="No data"/>}
       </Card>
@@ -309,8 +304,7 @@ const FunnelLeakTable=({title,tooltip,items,col1,col1label,rateKey,rateLabel,low
   );
 };
 
-// ── Quad Card (5 groups) ──────────────────────────────────────────────────────
-const QuadCard=({label,count,items,extraCols=[]})=>{
+const QuadCard=({label,count,items})=>{
   const [showModal,setShowModal]=useState(false);
   const map={
     star:{icon:"⭐ Star",color:T.green,desc:"Revenue ≥ median AND Margin ≥ 35%"},
@@ -320,18 +314,18 @@ const QuadCard=({label,count,items,extraCols=[]})=>{
     nosales:{icon:"🚫 No Sales Yet",color:T.text2,desc:"Revenue = 0 — no orders this period"},
   };
   const {icon,color,desc}=map[label];
-  const baseCols=[
-    {k:"name",label:"Product",wrap:true},
-    ...(label!=="nosales"?[{k:"revenue",label:"Revenue",r:true,render:p=>fUsd(p.revenue)},{k:"units",label:"Units",r:true,render:p=>fNum(p.units)}]:[]),
-    {k:"margin",label:"Margin",r:true,render:p=>fPct(p.margin)},
-    {k:"cost",label:"Cost",r:true,render:p=>fUsd(p.cost)},
-    ...(label==="nosales"?[{k:"stock",label:"Stock",r:true,render:p=>fNum(p.stock)}]:[]),
-  ];
   const sortedItems=[...items].sort((a,b)=>{
     if(label==="gem") return (b.margin||0)-(a.margin||0);
     if(label==="nosales") return b.stock-a.stock;
     return b.revenue-a.revenue;
   });
+  const baseCols=[
+    {k:"name",label:"Product",wrap:true},
+    ...(label!=="nosales"?[{k:"revenue",label:"Revenue",r:true,render:p=>fUsd(p.revenue)},{k:"units",label:"Units",r:true,render:p=>fNum(p.units)}]:[]),
+    {k:"margin",label:"Margin",r:true,render:p=>fPct(p.margin)},
+    {k:"adSpend",label:"Paid Ads Cost",r:true,render:p=>fUsd(p.adSpend)},
+    ...(label==="nosales"?[{k:"stock",label:"Stock",r:true,render:p=>fNum(p.stock)}]:[]),
+  ];
   return(
     <>
       <div style={{background:T.bg2,border:`1px solid ${T.line1}`,borderLeft:`3px solid ${color}`,borderRadius:"0 10px 10px 0",padding:"12px 14px",minHeight:180}}>
@@ -339,17 +333,17 @@ const QuadCard=({label,count,items,extraCols=[]})=>{
           <div><div style={{fontSize:12,fontWeight:600,color}}>{icon}</div><div style={{fontSize:11,color:T.text2,marginTop:2}}>{desc}</div></div>
           <div style={{fontSize:22,fontWeight:700,fontFamily:MONO,color:T.text0}}>{count}</div>
         </div>
-        <div style={{fontSize:10,color:T.text2,display:"grid",gridTemplateColumns:label==="nosales"?"1fr 50px 40px 35px":"1fr 55px 42px 35px 35px",gap:4,marginBottom:4,padding:"4px 2px",borderBottom:`1px solid ${T.line1}`}}>
+        <div style={{fontSize:10,color:T.text2,display:"grid",gridTemplateColumns:label==="nosales"?"1fr 50px 50px 35px":"1fr 55px 42px 35px 55px",gap:4,marginBottom:4,padding:"4px 2px",borderBottom:`1px solid ${T.line1}`}}>
           <span>Product</span>
-          {label!=="nosales"&&<><span style={{textAlign:"right"}}>Revenue</span><span style={{textAlign:"right"}}>Margin</span><span style={{textAlign:"right"}}>Units</span><span style={{textAlign:"right"}}>Cost</span></>}
-          {label==="nosales"&&<><span style={{textAlign:"right"}}>Margin</span><span style={{textAlign:"right"}}>Cost</span><span style={{textAlign:"right"}}>Stock</span></>}
+          {label!=="nosales"&&<><span style={{textAlign:"right"}}>Revenue</span><span style={{textAlign:"right"}}>Margin</span><span style={{textAlign:"right"}}>Units</span><span style={{textAlign:"right"}}>Ad Cost</span></>}
+          {label==="nosales"&&<><span style={{textAlign:"right"}}>Margin</span><span style={{textAlign:"right"}}>Ad Cost</span><span style={{textAlign:"right"}}>Stock</span></>}
         </div>
         <div style={{display:"flex",flexDirection:"column",gap:2}}>
           {sortedItems.slice(0,5).map((p,i)=>(
-            <div key={i} style={{display:"grid",gridTemplateColumns:label==="nosales"?"1fr 50px 40px 35px":"1fr 55px 42px 35px 35px",gap:4,padding:"3px 2px",borderBottom:`1px solid ${T.line1}`}}>
+            <div key={i} style={{display:"grid",gridTemplateColumns:label==="nosales"?"1fr 50px 50px 35px":"1fr 55px 42px 35px 55px",gap:4,padding:"3px 2px",borderBottom:`1px solid ${T.line1}`}}>
               <span style={{fontSize:11,color:T.text1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p.name||p.sku}</span>
-              {label!=="nosales"&&<><span style={{fontSize:11,color:T.text2,textAlign:"right",fontFamily:MONO}}>{fUsd(p.revenue)}</span><span style={{fontSize:11,color:T.text2,textAlign:"right",fontFamily:MONO}}>{fPct(p.margin)}</span><span style={{fontSize:11,color:T.text2,textAlign:"right",fontFamily:MONO}}>{fNum(p.units)}</span><span style={{fontSize:11,color:T.text2,textAlign:"right",fontFamily:MONO}}>{fUsd(p.cost)}</span></>}
-              {label==="nosales"&&<><span style={{fontSize:11,color:T.text2,textAlign:"right",fontFamily:MONO}}>{fPct(p.margin)}</span><span style={{fontSize:11,color:T.text2,textAlign:"right",fontFamily:MONO}}>{fUsd(p.cost)}</span><span style={{fontSize:11,color:T.text2,textAlign:"right",fontFamily:MONO}}>{fNum(p.stock)}</span></>}
+              {label!=="nosales"&&<><span style={{fontSize:11,color:T.text2,textAlign:"right",fontFamily:MONO}}>{fUsd(p.revenue)}</span><span style={{fontSize:11,color:T.text2,textAlign:"right",fontFamily:MONO}}>{fPct(p.margin)}</span><span style={{fontSize:11,color:T.text2,textAlign:"right",fontFamily:MONO}}>{fNum(p.units)}</span><span style={{fontSize:11,color:T.text2,textAlign:"right",fontFamily:MONO}}>{fUsd(p.adSpend)}</span></>}
+              {label==="nosales"&&<><span style={{fontSize:11,color:T.text2,textAlign:"right",fontFamily:MONO}}>{fPct(p.margin)}</span><span style={{fontSize:11,color:T.text2,textAlign:"right",fontFamily:MONO}}>{fUsd(p.adSpend)}</span><span style={{fontSize:11,color:T.text2,textAlign:"right",fontFamily:MONO}}>{fNum(p.stock)}</span></>}
             </div>
           ))}
         </div>
@@ -360,7 +354,6 @@ const QuadCard=({label,count,items,extraCols=[]})=>{
   );
 };
 
-// ── Stock Health Card ─────────────────────────────────────────────────────────
 const StockCard=({label,color,count,items})=>{
   const [showModal,setShowModal]=useState(false);
   return(
@@ -398,12 +391,10 @@ const SetupScreen=({onLoad})=>{
   return(<div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:T.bg0}}><div style={{background:T.bg1,border:`1px solid ${T.line1}`,borderRadius:16,padding:"40px 48px",width:480}}><i className="ti ti-table" style={{fontSize:28,color:T.blue,marginBottom:14,display:"block"}}/><div style={{fontSize:18,fontWeight:700,color:T.text0,marginBottom:6}}>Connect Google Sheet</div><div style={{fontSize:12,color:T.text2,marginBottom:20}}>Paste your Apps Script Web App URL below</div><input value={url} onChange={e=>setUrl(e.target.value)} onKeyDown={e=>e.key==="Enter"&&load()} placeholder="https://script.google.com/macros/s/..." style={{width:"100%",padding:"10px 14px",borderRadius:8,border:`1px solid ${T.line2}`,background:T.bg2,color:T.text0,fontSize:12,fontFamily:MONO,outline:"none",marginBottom:10}}/>{err&&<div style={{fontSize:12,color:T.red,marginBottom:8}}>{err}</div>}<button onClick={load} disabled={loading} style={{width:"100%",padding:"10px",borderRadius:8,background:T.blue,color:"#fff",border:"none",fontSize:13,fontFamily:FONT,fontWeight:600,cursor:"pointer",opacity:loading?.6:1}}>{loading?"Connecting...":"Load Dashboard"}</button></div></div>);
 };
 
-// ── TAB: PERFORMANCE ──────────────────────────────────────────────────────────
 const TabPerformance=({m})=>{
   const [prodView,setProdView]=useState("sku");
   const [showBrandModal,setShowBrandModal]=useState(false);
   const products=prodView==="sku"?[...m.skuList].sort((a,b)=>b.revenue-a.revenue):[...m.productList].sort((a,b)=>b.revenue-a.revenue);
-
   const brandCols=[
     {k:"name",label:"Brand",render:p=><span style={{fontWeight:600}}>{p.name}</span>},
     {k:"label",label:"Health",render:p=><BrandLabel label={p.label}/>},
@@ -416,7 +407,6 @@ const TabPerformance=({m})=>{
     {k:"adSpend",label:"Ad Cost",r:true,render:p=>fUsd(p.adSpend)},
     {k:"roas",label:"ROAS",r:true,render:p=>fX(p.roas)},
   ];
-
   const prodCols=[
     {k:"name",label:"Product",wrap:true},
     {k:"revenue",label:"Revenue",r:true,render:p=>fUsd(p.revenue)},
@@ -429,9 +419,7 @@ const TabPerformance=({m})=>{
     {k:"adSpend",label:"Paid Ads Cost",r:true,render:p=>fUsd(p.adSpend)},
     {k:"roas",label:"ROAS",r:true,render:p=>fX(p.roas)},
   ];
-
   const medianUsd=fUsd(m.brandRevMedian);
-
   return(
     <>
       <div style={{display:"grid",gridTemplateColumns:"repeat(6,1fr)",gap:8,marginBottom:12}} className="fade">
@@ -442,35 +430,21 @@ const TabPerformance=({m})=>{
         <Kpi icon="ti-receipt"         label="Conv Rate"  value={fPct(m.convRate)} ok={m.convRate>=.03} bad={m.convRate>0&&m.convRate<.01} sub="Session→Purchase"/>
         <Kpi icon="ti-ad-2"            label="Total ROAS" value={fX(m.totalROAS)} ok={m.totalROAS>=3} bad={m.totalROAS>0&&m.totalROAS<1} sub={`${fUsd(m.totalAdSpend)} spent`} mono/>
       </div>
-
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:12,marginBottom:0}}>
         <Card title="Overall Funnel" icon="ti-funnel" sub="Sessions → ATC → Checkout → Purchase">
           <FunnelViz sessions={m.totalSessions} atc={m.totalATC} checkout={m.totalCheckout} units={m.totalUnits}/>
         </Card>
-        <FunnelLeakTable title="Traffic → ATC Leaks"
-          tooltip={`Sessions ≥ 10, sort: Sessions DESC\nRate = ATC / Sessions\n🔴 <5%  🟡 5–15%  🟢 >15%`}
-          items={m.funnelTrafficATC} col1="sessions" col1label="Sess" rateKey="atcRate" rateLabel="ATC%" low={0.05} mid={0.15}/>
-        <FunnelLeakTable title="ATC → Checkout Leaks"
-          tooltip={`ATC ≥ 3, sort: ATC DESC\nRate = Checkout / ATC\n🔴 <40%  🟡 40–70%  🟢 >70%`}
-          items={m.funnelATCCheckout} col1="atc" col1label="ATC" rateKey="checkoutRate" rateLabel="Chk%" low={0.40} mid={0.70}/>
+        <FunnelLeakTable title="Traffic → ATC Leaks" tooltip={`Sessions ≥ 10, sort: Sessions DESC\nRate = ATC / Sessions\n🔴 <5%  🟡 5–15%  🟢 >15%`} items={m.funnelTrafficATC} col1="sessions" col1label="Sess" rateKey="atcRate" rateLabel="ATC%" low={0.05} mid={0.15}/>
+        <FunnelLeakTable title="ATC → Checkout Leaks" tooltip={`ATC ≥ 3, sort: ATC DESC\nRate = Checkout / ATC\n🔴 <40%  🟡 40–70%  🟢 >70%`} items={m.funnelATCCheckout} col1="atc" col1label="ATC" rateKey="checkoutRate" rateLabel="Chk%" low={0.40} mid={0.70}/>
       </div>
-
-      <FunnelLeakTable title="Checkout → Purchase Leaks"
-        tooltip={`Checkout ≥ 2, sort: Checkout DESC\nRate = Purchased / Checkout\n🔴 <50%  🟡 50–80%  🟢 >80%`}
-        items={m.funnelCheckoutPurchase} col1="checkout" col1label="Chk" rateKey="purchaseRate" rateLabel="Pur%" low={0.50} mid={0.80}/>
-
+      <FunnelLeakTable title="Checkout → Purchase Leaks" tooltip={`Checkout ≥ 2, sort: Checkout DESC\nRate = Purchased / Checkout\n🔴 <50%  🟡 50–80%  🟢 >80%`} items={m.funnelCheckoutPurchase} col1="checkout" col1label="Chk" rateKey="purchaseRate" rateLabel="Pur%" low={0.50} mid={0.80}/>
       <Card title="Brand Performance — Top 10" icon="ti-building-store"
-        tooltip={`Sort: Revenue DESC\nMedian revenue (brands with sales): ${medianUsd}\n⭐ Star: Rev ≥ ${medianUsd} AND Margin ≥ 35%\n💰 Cash Cow: Rev ≥ ${medianUsd} AND Margin < 35%\n💎 Hidden Gem: Rev < ${medianUsd} AND Margin ≥ 35%\n⚠️ At Risk: Rev < ${medianUsd} AND Margin < 35%`}>
+        tooltip={`Sort: Revenue DESC\nMedian revenue: ${medianUsd}\n⭐ Star: Rev ≥ ${medianUsd} AND Margin ≥ 35%\n💰 Cash Cow: Rev ≥ ${medianUsd} AND Margin < 35%\n💎 Hidden Gem: Rev < ${medianUsd} AND Margin ≥ 35%\n⚠️ At Risk: Rev < ${medianUsd} AND Margin < 35%`}>
         <Tbl max={10} cols={brandCols} rows={m.brandList}/>
-        {m.allBrands.length>10&&(
-          <button onClick={()=>setShowBrandModal(true)} style={{marginTop:10,fontSize:11,color:T.blue,background:"none",border:`1px solid ${T.blue}33`,borderRadius:6,padding:"3px 10px",cursor:"pointer",fontFamily:FONT}}>
-            +{m.allBrands.length-10} more brands
-          </button>
-        )}
+        {m.allBrands.length>10&&(<button onClick={()=>setShowBrandModal(true)} style={{marginTop:10,fontSize:11,color:T.blue,background:"none",border:`1px solid ${T.blue}33`,borderRadius:6,padding:"3px 10px",cursor:"pointer",fontFamily:FONT}}>+{m.allBrands.length-10} more brands</button>)}
       </Card>
       {showBrandModal&&<SearchModal title="All Brands" color={T.blue} allItems={m.allBrands} cols={brandCols} onClose={()=>setShowBrandModal(false)}/>}
-
-      <Card title="Top Products — Revenue" icon="ti-trophy" tooltip={`Sort: Revenue DESC, Top 10\nConv Rate = GA4-Purchased / GA4-Sessions`}>
+      <Card title="Top Products — Revenue" icon="ti-trophy" tooltip={`Sort: Revenue DESC\nConv Rate = GA4-Purchased / GA4-Sessions`}>
         <div style={{display:"flex",gap:6,marginBottom:10}}>
           <SubTab label="By SKU" active={prodView==="sku"} onClick={()=>setProdView("sku")}/>
           <SubTab label="By Product Name" active={prodView==="product"} onClick={()=>setProdView("product")}/>
@@ -481,37 +455,33 @@ const TabPerformance=({m})=>{
   );
 };
 
-// ── TAB: ADS ──────────────────────────────────────────────────────────────────
 const TabAds=({m})=>{
   const [channel,setChannel]=useState("gg");
   const ch=channel;
 
-  const ggGood=[...m.skuList].filter(p=>p.ggSpend>0&&p.beRoas&&p.ggRoas>=p.beRoas&&p.unitsGG>=1&&p.sessionsGG>=10).sort((a,b)=>b.revenueGG-a.revenueGG).slice(0,10);
-  const fbGood=[...m.skuList].filter(p=>p.fbSpend>0&&p.beRoas&&p.fbRoas>=p.beRoas&&p.unitsFB>=1&&p.sessionsFB>=10).sort((a,b)=>b.revenueFB-a.revenueFB).slice(0,10);
-  const ggWasted=[...m.skuList].filter(p=>p.ggSpend>0&&p.beRoas&&p.ggRoas<p.beRoas&&p.sessionsGG>=10).sort((a,b)=>b.ggSpend-a.ggSpend).slice(0,10);
-  const fbWasted=[...m.skuList].filter(p=>p.fbSpend>0&&p.beRoas&&p.fbRoas<p.beRoas&&p.sessionsFB>=10).sort((a,b)=>b.fbSpend-a.fbSpend).slice(0,10);
-  const ggScale=[...m.skuList].filter(p=>p.ggSpend>0&&p.beRoas&&p.ggRoas>=p.beRoas&&p.sessionsGG>=10&&p.unitsGG>=1&&p.stock>5&&(p.margin||0)>=0.35).sort((a,b)=>b.ggRoas-a.ggRoas).slice(0,10);
-  const fbScale=[...m.skuList].filter(p=>p.fbSpend>0&&p.beRoas&&p.fbRoas>=p.beRoas&&p.sessionsFB>=10&&p.unitsFB>=1&&p.stock>5&&(p.margin||0)>=0.35).sort((a,b)=>b.fbRoas-a.fbRoas).slice(0,10);
+  const ggGood=[...m.skuList].filter(p=>p.ggSpend>0&&p.beRoas&&p.ggRoas>=p.beRoas&&p.unitsGG>=1&&p.sessionsGG>=10&&(!p.maxCpa||p.ggCpa<=p.maxCpa)).sort((a,b)=>b.revenueGG-a.revenueGG).slice(0,10);
+  const fbGood=[...m.skuList].filter(p=>p.fbSpend>0&&p.beRoas&&p.fbRoas>=p.beRoas&&p.unitsFB>=1&&p.sessionsFB>=10&&(!p.maxCpa||p.fbCpa<=p.maxCpa)).sort((a,b)=>b.revenueFB-a.revenueFB).slice(0,10);
+  const ggWasted=[...m.skuList].filter(p=>p.ggSpend>0&&p.sessionsGG>=10&&(p.beRoas&&p.ggRoas<p.beRoas||(p.maxCpa&&p.ggCpa>p.maxCpa))).sort((a,b)=>b.ggSpend-a.ggSpend).slice(0,10);
+  const fbWasted=[...m.skuList].filter(p=>p.fbSpend>0&&p.sessionsFB>=10&&(p.beRoas&&p.fbRoas<p.beRoas||(p.maxCpa&&p.fbCpa>p.maxCpa))).sort((a,b)=>b.fbSpend-a.fbSpend).slice(0,10);
+  const ggScale=[...m.skuList].filter(p=>p.ggSpend>0&&p.beRoas&&p.ggRoas>=p.beRoas&&p.sessionsGG>=10&&p.unitsGG>=1&&p.stock>5&&(p.margin||0)>=0.35&&(!p.maxCpa||p.ggCpa<=p.maxCpa)).sort((a,b)=>b.ggRoas-a.ggRoas).slice(0,10);
+  const fbScale=[...m.skuList].filter(p=>p.fbSpend>0&&p.beRoas&&p.fbRoas>=p.beRoas&&p.sessionsFB>=10&&p.unitsFB>=1&&p.stock>5&&(p.margin||0)>=0.35&&(!p.maxCpa||p.fbCpa<=p.maxCpa)).sort((a,b)=>b.fbRoas-a.fbRoas).slice(0,10);
 
   const chanSwitch=(<div style={{display:"flex",gap:6,marginBottom:10}}><SubTab label="Google Ads" active={ch==="gg"} onClick={()=>setChannel("gg")}/><SubTab label="Facebook Ads" active={ch==="fb"} onClick={()=>setChannel("fb")}/></div>);
 
   const adsCols=[
     {k:"name",label:"Product",wrap:true},
     {k:"spend",label:"Spend",r:true,render:p=>fUsd(ch==="gg"?p.ggSpend:p.fbSpend)},
+    {k:"stock",label:"Stock",r:true,render:p=><span style={{color:p.stock<=0?T.red:p.stock<=5?T.orange:T.text0}}>{fNum(p.stock)}</span>},
     {k:"revGA4",label:"Rev (GA4)",r:true,render:p=>fUsd(ch==="gg"?p.revenueGG:p.revenueFB)},
-    {k:"roasGA4",label:"ROAS (GA4)",r:true,render:p=>fX(ch==="gg"?p.ggRoas:p.fbRoas)},
-    {k:"roasPlat",label:"ROAS (Plat)",r:true,render:p=>ch==="gg"?fX(p.ggRoasPlat):<span style={{color:T.text2}}>—</span>},
+    {k:"roasGA4",label:"ROAS",r:true,render:p=>fX(ch==="gg"?p.ggRoas:p.fbRoas)},
     {k:"beRoas",label:"BE ROAS",r:true,render:p=>fX(p.beRoas)},
-    {k:"purch",label:"Purch (GA4)",r:true,render:p=>fNum(ch==="gg"?p.unitsGG:p.unitsFB)},
-    {k:"conv",label:"Conv (Plat)",r:true,render:p=>ch==="gg"?fNum(p.ggConv):<span style={{color:T.text2}}>—</span>},
-    {k:"cpaGA4",label:"CPA (GA4)",r:true,render:p=>fUsd(ch==="gg"?p.ggCpa:p.fbCpa)},
-    {k:"cpaPlat",label:"CPA (Plat)",r:true,render:p=>ch==="gg"?fUsd(p.ggCpaPlat):<span style={{color:T.text2}}>—</span>},
+    {k:"purch",label:"Purch",r:true,render:p=>fNum(ch==="gg"?p.unitsGG:p.unitsFB)},
+    {k:"cpa",label:"CPA",r:true,render:p=>{const cpa=ch==="gg"?p.ggCpa:p.fbCpa;const bad=p.maxCpa&&cpa>p.maxCpa;return <span style={{color:bad?T.red:T.text0}}>{fUsd(cpa)}</span>;}},
+    {k:"maxCpa",label:"Max CPA",r:true,render:p=>fUsd(p.maxCpa)},
     {k:"sessions",label:"Sessions",r:true,render:p=>fNum(ch==="gg"?p.sessionsGG:p.sessionsFB)},
-    {k:"clicks",label:"Clicks",r:true,render:p=>fNum(ch==="gg"?p.ggClick:p.fbClicks)},
-    {k:"imp",label:"Imp",r:true,render:p=>fNum(ch==="gg"?p.ggImp:p.fbImp)},
     {k:"ctr",label:"CTR",r:true,render:p=>fPct(ch==="gg"?p.ggCtr:p.fbCtr)},
     {k:"cr",label:"Conv Rate",r:true,render:p=>fPct(ch==="gg"?p.ggConvRate:p.fbConvRate)},
-    {k:"crPlat",label:"CR (Plat)",r:true,render:p=>ch==="gg"?fPct(p.ggCrPlat):<span style={{color:T.text2}}>—</span>},
+    {k:"margin",label:"Margin",r:true,render:p=>fPct(p.margin)},
   ];
 
   const ggROAS=m.totalGGSpend>0?m.totalRevenueGG/m.totalGGSpend:null;
@@ -564,7 +534,7 @@ const TabAds=({m})=>{
               ].map(([label,v1,v2,v3,v4],i)=>(
                 <tr key={i} className="row-hover" style={{background:i%2===0?"transparent":T.bg2+"88"}}>
                   <td style={{padding:"7px 10px",borderBottom:`1px solid ${T.line1}`,color:T.text2,fontWeight:500}}>{label}</td>
-                  {[v1,v2,v3,v4].map((v,j)=>(<td key={j} style={{padding:"7px 10px",borderBottom:`1px solid ${T.line1}`,textAlign:"right",color:v==="—"||v.includes?.("soon")?T.text2:T.text0,fontFamily:MONO,fontSize:12}}>{v}</td>))}
+                  {[v1,v2,v3,v4].map((v,j)=>(<td key={j} style={{padding:"7px 10px",borderBottom:`1px solid ${T.line1}`,textAlign:"right",color:v==="—"||v?.includes?.("soon")?T.text2:T.text0,fontFamily:MONO,fontSize:12}}>{v}</td>))}
                 </tr>
               ))}
             </tbody>
@@ -572,37 +542,39 @@ const TabAds=({m})=>{
         </div>
       </Card>
       <Card title="Top Products — Good Ads Performance" icon="ti-trophy"
-        tooltip={`Condition: Spend > 0, ROAS ≥ BE ROAS, Purchases ≥ 1, Sessions ≥ 10\nSort: Revenue DESC`}>
-        {chanSwitch}
-        <Tbl max={10} cols={adsCols} rows={ch==="gg"?ggGood:fbGood}/>
+        tooltip={`Spend > 0\nROAS ≥ BE ROAS (MAP Price / (MAP Price - Cost))\nPurchases ≥ 1\nSessions ≥ 10\nCPA ≤ Max CPA (MAP Price - Cost)\nSort: Revenue DESC`}>
+        {chanSwitch}<Tbl max={10} cols={adsCols} rows={ch==="gg"?ggGood:fbGood}/>
       </Card>
       <Card title="Wasted Spend" icon="ti-flame"
-        tooltip={`Spend > 0\nROAS < Break-even ROAS (1/Margin)\nSessions ≥ 10\nSort: Spend DESC`}>
+        tooltip={`Spend > 0 AND Sessions ≥ 10\nAND (ROAS < BE ROAS OR CPA > Max CPA)\nBE ROAS = MAP Price / (MAP Price - Cost)\nMax CPA = MAP Price - Cost\nSort: Spend DESC`}>
         {chanSwitch}
         <Tbl max={10} cols={[
           {k:"name",label:"Product",wrap:true},
           {k:"spend",label:"Spend",r:true,render:p=>fUsd(ch==="gg"?p.ggSpend:p.fbSpend)},
+          {k:"stock",label:"Stock",r:true,render:p=><span style={{color:p.stock<=0?T.red:p.stock<=5?T.orange:T.text0}}>{fNum(p.stock)}</span>},
           {k:"revenue",label:"Revenue",r:true,render:p=>fUsd(ch==="gg"?p.revenueGG:p.revenueFB)},
           {k:"roas",label:"ROAS",r:true,render:p=><span style={{color:T.red}}>{fX(ch==="gg"?p.ggRoas:p.fbRoas)}</span>},
           {k:"beRoas",label:"BE ROAS",r:true,render:p=>fX(p.beRoas)},
-          {k:"units",label:"Purch",r:true,render:p=>fNum(ch==="gg"?p.unitsGG:p.unitsFB)},
-          {k:"cpa",label:"CPA",r:true,render:p=>fUsd(ch==="gg"?p.ggCpa:p.fbCpa)},
+          {k:"cpa",label:"CPA",r:true,render:p=>{const cpa=ch==="gg"?p.ggCpa:p.fbCpa;return <span style={{color:p.maxCpa&&cpa>p.maxCpa?T.red:T.text0}}>{fUsd(cpa)}</span>;}},
+          {k:"maxCpa",label:"Max CPA",r:true,render:p=>fUsd(p.maxCpa)},
           {k:"sessions",label:"Sessions",r:true,render:p=>fNum(ch==="gg"?p.sessionsGG:p.sessionsFB)},
           {k:"margin",label:"Margin",r:true,render:p=>fPct(p.margin)},
         ]} rows={ch==="gg"?ggWasted:fbWasted}/>
       </Card>
       <Card title="Scale Up Candidates" icon="ti-rocket"
-        tooltip={`Spend > 0\nROAS ≥ Break-even ROAS\nSessions ≥ 10\nPurchases ≥ 1\nStock > 5\nMargin ≥ 35%\nSort: ROAS DESC`}>
+        tooltip={`Spend > 0\nROAS ≥ BE ROAS\nCPA ≤ Max CPA\nSessions ≥ 10\nPurchases ≥ 1\nStock > 5\nMargin ≥ 35%\nSort: ROAS DESC`}>
         {chanSwitch}
         <Tbl max={10} cols={[
           {k:"name",label:"Product",wrap:true},
           {k:"spend",label:"Spend",r:true,render:p=>fUsd(ch==="gg"?p.ggSpend:p.fbSpend)},
+          {k:"stock",label:"Stock",r:true,render:p=><span style={{color:p.stock<=0?T.red:p.stock<=5?T.orange:T.text0}}>{fNum(p.stock)}</span>},
           {k:"revenue",label:"Revenue",r:true,render:p=>fUsd(ch==="gg"?p.revenueGG:p.revenueFB)},
           {k:"roas",label:"ROAS",r:true,render:p=><span style={{color:T.green}}>{fX(ch==="gg"?p.ggRoas:p.fbRoas)}</span>},
           {k:"beRoas",label:"BE ROAS",r:true,render:p=>fX(p.beRoas)},
+          {k:"cpa",label:"CPA",r:true,render:p=>fUsd(ch==="gg"?p.ggCpa:p.fbCpa)},
+          {k:"maxCpa",label:"Max CPA",r:true,render:p=>fUsd(p.maxCpa)},
           {k:"units",label:"Purch",r:true,render:p=>fNum(ch==="gg"?p.unitsGG:p.unitsFB)},
           {k:"sessions",label:"Sessions",r:true,render:p=>fNum(ch==="gg"?p.sessionsGG:p.sessionsFB)},
-          {k:"stock",label:"Stock",r:true,render:p=>fNum(p.stock)},
           {k:"margin",label:"Margin",r:true,render:p=>fPct(p.margin)},
         ]} rows={ch==="gg"?ggScale:fbScale}/>
       </Card>
@@ -610,23 +582,18 @@ const TabAds=({m})=>{
   );
 };
 
-// ── TAB: HEALTH ───────────────────────────────────────────────────────────────
 const TabHealth=({m})=>{
   const slowMoving=[...m.skuList].filter(p=>p.stock>20&&p.units<2).sort((a,b)=>b.stock*b.cost-a.stock*a.cost).slice(0,10);
   const noConvert=[...m.skuList].filter(p=>p.ggSpend>0&&p.beRoas&&p.ggRoas<p.beRoas&&p.sessionsGG>=10).sort((a,b)=>b.ggSpend-a.ggSpend);
   const zeroRevenue=[...m.skuList].filter(p=>p.sessions>=30&&p.units===0&&p.revenue===0).sort((a,b)=>b.sessions-a.sessions);
   const section3=[...noConvert,...zeroRevenue].filter((p,i,arr)=>arr.findIndex(x=>x.sku===p.sku)===i).slice(0,10);
   const scaleUp=[...m.skuList].filter(p=>p.adSpend>0&&p.beRoas&&p.roas>=p.beRoas&&p.sessions>=50&&p.units>=2&&p.stock>5&&(p.margin||0)>=0.35).sort((a,b)=>b.roas-a.roas).slice(0,10);
-
   const quad={star:[],cashcow:[],gem:[],risk:[],nosales:[]};
   m.skuList.forEach(p=>quad[m.quadrant(p)].push(p));
-
   const medianUsd=fUsd(m.revMedian);
-
   return(
     <>
-      <Card title="Product Health Matrix" icon="ti-layout-grid"
-        sub="Revenue vs Margin — median of products with sales"
+      <Card title="Product Health Matrix" icon="ti-layout-grid" sub="Revenue vs Margin — median of products with sales"
         tooltip={`Revenue threshold (median of SKUs with revenue > 0): ${medianUsd}\nMargin threshold: 35%\n\n⭐ Star: Rev ≥ ${medianUsd} AND Margin ≥ 35%\n💰 Cash Cow: Rev ≥ ${medianUsd} AND Margin < 35%\n💎 Hidden Gem: 0 < Rev < ${medianUsd} AND Margin ≥ 35%\n⚠️ At Risk: 0 < Rev < ${medianUsd} AND Margin < 35%\n🚫 No Sales Yet: Revenue = 0`}>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
           <QuadCard label="star"    count={quad.star.length}    items={quad.star}/>
@@ -636,7 +603,6 @@ const TabHealth=({m})=>{
         </div>
         <QuadCard label="nosales" count={quad.nosales.length} items={quad.nosales}/>
       </Card>
-
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
         <Card title="Slow Moving Inventory" icon="ti-package" tooltip={`Stock > 20 AND Units sold < 2\nSort: Stock Value DESC`}>
           <Tbl max={10} cols={[
@@ -660,7 +626,6 @@ const TabHealth=({m})=>{
           ]} rows={scaleUp}/>
         </Card>
       </div>
-
       <Card title="Ads Not Converting + High Traffic Zero Revenue" icon="ti-alert-circle"
         tooltip={`Group 1: GG Spend > 0 AND ROAS < BE ROAS AND Sessions-GG ≥ 10\nGroup 2: Sessions ≥ 30 AND Purchases = 0 AND Revenue = 0\nSort: Spend DESC`}>
         <Tbl max={10} cols={[
@@ -671,6 +636,7 @@ const TabHealth=({m})=>{
           {k:"units",label:"Purch",r:true,render:p=>fNum(p.units)},
           {k:"adSpend",label:"Ad Cost",r:true,render:p=>fUsd(p.adSpend)},
           {k:"cpa",label:"CPA",r:true,render:p=>fUsd(p.cpa)},
+          {k:"maxCpa",label:"Max CPA",r:true,render:p=>fUsd(p.maxCpa)},
           {k:"beRoas",label:"BE ROAS",r:true,render:p=>fX(p.beRoas)},
           {k:"roas",label:"ROAS",r:true,render:p=><span style={{color:T.red}}>{fX(p.roas)}</span>},
           {k:"margin",label:"Margin",r:true,render:p=>fPct(p.margin)},
@@ -681,7 +647,6 @@ const TabHealth=({m})=>{
   );
 };
 
-// ── TAB: INVENTORY ────────────────────────────────────────────────────────────
 const TabInventory=({m,range})=>{
   const [showStockModal,setShowStockModal]=useState(false);
   const now=new Date();
@@ -695,7 +660,6 @@ const TabInventory=({m,range})=>{
   const healthyItems=[...m.skuList].filter(p=>p.stock>5).sort((a,b)=>b.revenue-a.revenue);
   const slowItems=[...m.skuList].filter(p=>p.stock>20&&p.units<2).sort((a,b)=>b.stock*b.cost-a.stock*a.cost);
   const stockVsSales=[...m.skuList].sort((a,b)=>b.stock*b.cost-a.stock*a.cost);
-
   const DaysBadge=({p})=>{
     if(p.stock<=0) return <span style={{fontSize:10,padding:"2px 8px",borderRadius:20,background:T.red+"22",color:T.red,fontWeight:600}}>Out</span>;
     if(p.units===0) return <span style={{fontSize:10,padding:"2px 8px",borderRadius:20,background:T.red+"22",color:T.red,fontWeight:600}}>No sales</span>;
@@ -703,7 +667,6 @@ const TabInventory=({m,range})=>{
     const color=d<14?T.red:d<30?T.orange:T.green;
     return <span style={{fontSize:10,padding:"2px 8px",borderRadius:20,background:color+"22",color,fontWeight:600}}>{d}d</span>;
   };
-
   const stockVsCols=[
     {k:"name",label:"Product",wrap:true},
     {k:"stock",label:"Stock",r:true,render:p=><span style={{color:p.stock<=0?T.red:p.stock<=5?T.orange:T.text0}}>{fNum(p.stock)}</span>},
@@ -713,7 +676,6 @@ const TabInventory=({m,range})=>{
     {k:"days",label:`Days (${days}d)`,r:true,render:p=><DaysBadge p={p}/>},
     {k:"margin",label:"Margin",r:true,render:p=>fPct(p.margin)},
   ];
-
   return(
     <>
       <div style={{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:8,marginBottom:12}} className="fade">
@@ -723,7 +685,6 @@ const TabInventory=({m,range})=>{
         <Kpi icon="ti-alert-triangle"  label="Low Stock (≤5)"   value={fNum(lowStock)} bad={lowStock>0} sub="Restock soon" mono/>
         <Kpi icon="ti-currency-dollar" label="Total Stock Value" value={fUsd(totalStockVal)} sub="Stock × Cost" mono/>
       </div>
-
       <Card title="Stock Health Breakdown" icon="ti-heart-rate"
         tooltip={`🔴 Out of Stock: sort by Revenue DESC\n🟡 Low Stock (0-5): sort by Revenue DESC\n🟢 Healthy (>5): sort by Revenue DESC\n⚫ Slow Moving (Stock>20, Units<2): sort by Stock Value DESC`}>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
@@ -733,22 +694,15 @@ const TabInventory=({m,range})=>{
           <StockCard label="⚫ Slow Moving"  color={T.text2}  count={slowItems.length}  items={slowItems}/>
         </div>
       </Card>
-
-      <Card title="Stock vs Sales" icon="ti-arrows-exchange"
-        tooltip={`Days of Stock = Stock / (Units / ${days} days)\nSort: Stock Value DESC`}>
+      <Card title="Stock vs Sales" icon="ti-arrows-exchange" tooltip={`Days of Stock = Stock / (Units / ${days} days)\nSort: Stock Value DESC`}>
         <Tbl max={20} cols={stockVsCols} rows={stockVsSales}/>
-        {stockVsSales.length>20&&(
-          <button onClick={()=>setShowStockModal(true)} style={{marginTop:10,fontSize:11,color:T.blue,background:"none",border:`1px solid ${T.blue}33`,borderRadius:6,padding:"3px 10px",cursor:"pointer",fontFamily:FONT}}>
-            +{stockVsSales.length-20} more
-          </button>
-        )}
+        {stockVsSales.length>20&&(<button onClick={()=>setShowStockModal(true)} style={{marginTop:10,fontSize:11,color:T.blue,background:"none",border:`1px solid ${T.blue}33`,borderRadius:6,padding:"3px 10px",cursor:"pointer",fontFamily:FONT}}>+{stockVsSales.length-20} more</button>)}
       </Card>
       {showStockModal&&<SearchModal title="Stock vs Sales" color={T.blue} allItems={stockVsSales} cols={stockVsCols} onClose={()=>setShowStockModal(false)}/>}
     </>
   );
 };
 
-// ── MAIN ──────────────────────────────────────────────────────────────────────
 const TABS=[{k:"performance",label:"Performance",icon:"ti-chart-line"},{k:"ads",label:"Ads",icon:"ti-ad-2"},{k:"health",label:"Product Health",icon:"ti-heart-rate"},{k:"inventory",label:"Inventory",icon:"ti-package"}];
 const RANGES=["MTD","Last 30D","Last Month","YTD"];
 
@@ -761,7 +715,6 @@ export default function App() {
   const [syncing,setSyncing]=useState(false);
   const [lastSync,setLastSync]=useState(null);
   const timerRef=useRef(null);
-
   const handleAuth=()=>{localStorage.setItem("rc_authed","1");setAuthed(true);};
   const handleLoad=useCallback((url,text)=>{
     try{
@@ -774,7 +727,6 @@ export default function App() {
     }catch(e){console.error("Parse error:",e);}
     setHasUrl(true);
   },[]);
-
   const refresh=useCallback(async()=>{
     const url=localStorage.getItem("rc_apps_script_url");
     if(!url) return;
@@ -782,13 +734,10 @@ export default function App() {
     try{const rp=range==="MTD"?"mtd":range==="Last 30D"?"last30":range==="Last Month"?"lastmonth":"ytd";const res=await fetch(`${url}?range=${rp}`);const text=await res.text();handleLoad(url,text);}catch(e){console.error(e);}
     setSyncing(false);
   },[handleLoad,range]);
-
   useEffect(()=>{if(authed&&hasUrl&&!metrics)refresh();},[authed,hasUrl,metrics,refresh]);
   useEffect(()=>{if(!authed||!hasUrl)return;timerRef.current=setInterval(refresh,30000);return()=>clearInterval(timerRef.current);},[authed,hasUrl,refresh]);
-
   if(!authed) return <PasswordScreen onAuth={handleAuth}/>;
   if(!hasUrl) return <SetupScreen onLoad={handleLoad}/>;
-
   return(
     <>
       <style>{css}</style>
