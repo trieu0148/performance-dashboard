@@ -516,7 +516,8 @@ const SetupScreen = ({ onLoad }) => {
     if (!url.trim()) return;
     setLoading(true); setErr("");
     try {
-      const res = await fetch(url.trim());
+      const fetchUrl = `${url.trim()}?range=mtd`;
+      const res = await fetch(fetchUrl);
       const text = await res.text();
       localStorage.setItem("rc_apps_script_url", url.trim());
       onLoad(url.trim(), text);
@@ -1029,6 +1030,12 @@ export default function App() {
   const handleAuth = () => { localStorage.setItem("rc_authed", "1"); setAuthed(true); };
 
   const handleLoad = useCallback((url, text) => {
+    // Check if response is JSON error
+    try {
+      const json = JSON.parse(text);
+      if (json.error) { console.error("Apps Script error:", json.error); return; }
+    } catch (e) { /* not JSON, proceed as CSV */ }
+
     setRawText(text);
     try {
       const rows = parseCSV(text);
@@ -1047,12 +1054,14 @@ export default function App() {
     if (!url) return;
     setSyncing(true);
     try {
-      const res = await fetch(url);
+      const rangeParam = range === "MTD" ? "mtd" : range === "Last 30D" ? "last30" : range === "Last Month" ? "lastmonth" : "ytd";
+      const fetchUrl = `${url}?range=${rangeParam}`;
+      const res = await fetch(fetchUrl);
       const text = await res.text();
       handleLoad(url, text);
     } catch (e) { console.error("Refresh error:", e); }
     setSyncing(false);
-  }, [handleLoad]);
+  }, [handleLoad, range]);
 
   useEffect(() => {
     if (authed && hasUrl && !metrics) refresh();
@@ -1080,14 +1089,20 @@ export default function App() {
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             {/* Range selector */}
             <div style={{ display: "flex", gap: 4 }}>
-              {RANGES.map(r => (
-                <button key={r} onClick={() => setRange(r)} style={{
-                  padding: "5px 12px", fontSize: 11, fontFamily: FONT, borderRadius: 6, cursor: "pointer",
-                  border: `1px solid ${range === r ? T.blue : T.line1}`,
-                  background: range === r ? T.blue + "22" : "transparent",
-                  color: range === r ? T.blue : T.text2, transition: "all .15s",
-                }}>{r}</button>
-              ))}
+              {RANGES.map(r => {
+                const available = r === "MTD";
+                return (
+                  <button key={r} onClick={() => available && setRange(r)} style={{
+                    padding: "5px 12px", fontSize: 11, fontFamily: FONT, borderRadius: 6,
+                    cursor: available ? "pointer" : "not-allowed",
+                    border: `1px solid ${range === r ? T.blue : T.line1}`,
+                    background: range === r ? T.blue + "22" : "transparent",
+                    color: range === r ? T.blue : T.text2,
+                    opacity: available ? 1 : 0.35,
+                    transition: "all .15s",
+                  }}>{r}{!available && " 🔒"}</button>
+                );
+              })}
             </div>
             <button onClick={refresh} disabled={syncing} style={{ padding: "5px 12px", fontSize: 11, fontFamily: FONT, borderRadius: 6, border: `1px solid ${T.line1}`, background: "transparent", color: T.text2, cursor: "pointer" }}>
               <i className={`ti ${syncing ? "ti-loader-2" : "ti-refresh"}`} style={{ fontSize: 13 }} />
