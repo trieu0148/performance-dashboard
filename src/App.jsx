@@ -533,7 +533,156 @@ const PasswordScreen=({onAuth})=>{
 };
 
 // ── TAB: OVERVIEW ─────────────────────────────────────────────────────────────
-const TabOverview=({m})=>{
+// ── Revenue by Website Bar Chart ─────────────────────────────────────────────
+const RevenueByWebsite=({rawRows})=>{
+  if(!rawRows||!rawRows.length) return null;
+  const headers=Object.keys(rawRows[0]);
+  const sites=[{key:"DRC",label:"Direct RC",color:T.blue},{key:"HD",label:"HeliDirect",color:T.cyan},{key:"Fur",label:"FuritekUSA",color:T.purple}];
+  const data=sites.map(s=>{
+    const col=headers.find(h=>h===`${s.key}-GA4-Item revenue`);
+    const rev=col?rawRows.reduce((sum,r)=>{const v=r[col];const p=parseFloat(String(v||0).replace(/[$,%]/g,""));return sum+(isNaN(p)?0:p);},0):0;
+    return {...s,rev};
+  });
+  const max=Math.max(...data.map(d=>d.rev),1);
+  const total=data.reduce((s,d)=>s+d.rev,0);
+  return(
+    <Card title="Revenue by Website" icon="ti-chart-bar" sub="MTD — All websites combined">
+      <div style={{display:"flex",flexDirection:"column",gap:12}}>
+        {data.map(d=>(
+          <div key={d.key} style={{display:"flex",alignItems:"center",gap:12}}>
+            <div style={{width:100,fontSize:12,color:T.text1,fontWeight:500}}>{d.label}</div>
+            <div style={{flex:1,height:28,background:T.bg3,borderRadius:6,overflow:"hidden",position:"relative"}}>
+              <div style={{width:`${(d.rev/max)*100}%`,height:"100%",background:d.color,borderRadius:6,transition:"width .6s",opacity:.85}}/>
+            </div>
+            <div style={{width:70,textAlign:"right",fontSize:13,fontFamily:MONO,color:T.text0,fontWeight:600}}>{fUsd(d.rev)}</div>
+            <div style={{width:45,textAlign:"right",fontSize:11,color:T.text2}}>{total>0?`${((d.rev/total)*100).toFixed(1)}%`:"—"}</div>
+          </div>
+        ))}
+      </div>
+    </Card>
+  );
+};
+
+// ── Budget Allocation Chart ───────────────────────────────────────────────────
+const BudgetAllocation=({m})=>{
+  const ggRev=m.totalRevenueGG,fbRev=m.totalRevenueFB;
+  const ggSpend=m.totalGGSpend,fbSpend=m.totalFBSpend;
+  const totalRev=ggRev+fbRev,totalSpend=ggSpend+fbSpend;
+  if(totalSpend===0) return null;
+  const rows=[
+    {label:"Google Ads",color:T.blue,spend:ggSpend,rev:ggRev},
+    {label:"Facebook Ads",color:T.orange,spend:fbSpend,rev:fbRev},
+  ];
+  return(
+    <Card title="Budget Allocation" icon="ti-adjustments" sub="Spend % vs Revenue % by channel"
+      tooltip={`Ideal: spend % ≈ revenue %
+If spend% >> revenue% → over-investing
+If spend% << revenue% → under-investing`}>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}>
+        {rows.map(r=>{
+          const spendPct=totalSpend>0?(r.spend/totalSpend)*100:0;
+          const revPct=totalRev>0?(r.rev/totalRev)*100:0;
+          const diff=revPct-spendPct;
+          return(
+            <div key={r.label} style={{background:T.bg2,borderRadius:10,padding:"12px 14px",border:`1px solid ${T.line1}`}}>
+              <div style={{fontSize:12,fontWeight:600,color:r.color,marginBottom:8}}>{r.label}</div>
+              <div style={{display:"flex",flexDirection:"column",gap:6}}>
+                <div>
+                  <div style={{display:"flex",justifyContent:"space-between",fontSize:11,color:T.text2,marginBottom:3}}>
+                    <span>Spend</span><span style={{fontFamily:MONO,color:T.text0}}>{fUsd(r.spend)} ({spendPct.toFixed(1)}%)</span>
+                  </div>
+                  <div style={{height:6,background:T.bg3,borderRadius:3,overflow:"hidden"}}>
+                    <div style={{width:`${spendPct}%`,height:"100%",background:r.color,opacity:.6,borderRadius:3}}/>
+                  </div>
+                </div>
+                <div>
+                  <div style={{display:"flex",justifyContent:"space-between",fontSize:11,color:T.text2,marginBottom:3}}>
+                    <span>Revenue</span><span style={{fontFamily:MONO,color:T.text0}}>{fUsd(r.rev)} ({revPct.toFixed(1)}%)</span>
+                  </div>
+                  <div style={{height:6,background:T.bg3,borderRadius:3,overflow:"hidden"}}>
+                    <div style={{width:`${revPct}%`,height:"100%",background:r.color,borderRadius:3}}/>
+                  </div>
+                </div>
+                <div style={{fontSize:11,marginTop:4,color:diff>5?T.green:diff<-5?T.red:T.text2,fontWeight:500}}>
+                  {diff>5?"✅ Under-spent — consider increasing budget":diff<-5?"⚠️ Over-spent relative to revenue":"✓ Balanced allocation"}
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </Card>
+  );
+};
+
+// ── Margin Analysis ───────────────────────────────────────────────────────────
+const MarginAnalysis=({m})=>{
+  const brandMap={};
+  m.skuList.forEach(p=>{
+    const k=p.brand||"Unknown";
+    if(!brandMap[k]) brandMap[k]={name:k,revenue:0,units:0,margins:[],skuCount:0};
+    const b=brandMap[k];
+    b.revenue+=p.revenue; b.units+=p.units; b.skuCount++;
+    if(p.margin>0&&p.margin<=1) b.margins.push(p.margin);
+  });
+  const brands=Object.values(brandMap).map(b=>({
+    ...b,
+    avgMargin:b.margins.length?b.margins.reduce((a,c)=>a+c,0)/b.margins.length:null,
+    minMargin:b.margins.length?Math.min(...b.margins):null,
+    maxMargin:b.margins.length?Math.max(...b.margins):null,
+  })).filter(b=>b.revenue>0).sort((a,b)=>b.revenue-a.revenue).slice(0,15);
+
+  return(
+    <Card title="Margin Analysis by Brand" icon="ti-percentage" sub="Top 15 brands by revenue"
+      tooltip={`Avg Margin = average across all SKUs of the brand
+Min/Max = range of margins within brand`}>
+      <Tbl max={15} cols={[
+        {k:"name",label:"Brand",render:p=><span style={{fontWeight:600}}>{p.name}</span>},
+        {k:"revenue",label:"Revenue",r:true,render:p=>fUsd(p.revenue)},
+        {k:"units",label:"Units",r:true,render:p=>fNum(p.units)},
+        {k:"skuCount",label:"SKUs",r:true,render:p=>fNum(p.skuCount)},
+        {k:"avgMargin",label:"Avg Margin",r:true,render:p=><span style={{color:(p.avgMargin||0)>=0.35?T.green:(p.avgMargin||0)>=0.25?T.yellow:T.red,fontWeight:600}}>{fPct(p.avgMargin)}</span>},
+        {k:"minMargin",label:"Min",r:true,render:p=><span style={{color:T.text2}}>{fPct(p.minMargin)}</span>},
+        {k:"maxMargin",label:"Max",r:true,render:p=><span style={{color:T.text2}}>{fPct(p.maxMargin)}</span>},
+      ]} rows={brands}/>
+    </Card>
+  );
+};
+
+// ── MAP Compliance ────────────────────────────────────────────────────────────
+const MAPCompliance=({m})=>{
+  const items=m.skuList
+    .filter(p=>p.price>0&&p.units>0&&p.revenue>0)
+    .map(p=>({...p,avgSellPrice:p.revenue/p.units,diff:(p.revenue/p.units)-p.price}))
+    .filter(p=>p.avgSellPrice<p.price)
+    .sort((a,b)=>a.diff-b.diff)
+    .slice(0,20);
+  if(!items.length) return(
+    <Card title="MAP Compliance" icon="ti-shield-check" sub="Minimum Advertised Price">
+      <div style={{textAlign:"center",padding:"1.5rem",color:T.green,fontSize:13}}>
+        <i className="ti ti-check" style={{fontSize:24,display:"block",marginBottom:6}}/>All products compliant ✅
+      </div>
+    </Card>
+  );
+  return(
+    <Card title="MAP Compliance — Non-Compliant Products" icon="ti-shield-x"
+      tooltip={`Avg Selling Price = Revenue / Units
+Non-compliant: Avg Selling Price < MAP Price
+Note: based on average, actual per-order price may vary`}>
+      <Tbl max={20} cols={[
+        {k:"name",label:"Product",wrap:true},
+        {k:"price",label:"MAP Price",r:true,render:p=>fUsd(p.price)},
+        {k:"avgSellPrice",label:"Avg Sell Price",r:true,render:p=><span style={{color:T.red}}>{fUsd(p.avgSellPrice)}</span>},
+        {k:"diff",label:"Difference",r:true,render:p=><span style={{color:T.red}}>{fUsd(p.diff)}</span>},
+        {k:"units",label:"Units",r:true,render:p=>fNum(p.units)},
+        {k:"revenue",label:"Revenue",r:true,render:p=>fUsd(p.revenue)},
+        {k:"margin",label:"Margin",r:true,render:p=>fPct(p.margin)},
+      ]} rows={items} showMore allRows={items} modalTitle="MAP Non-Compliant" modalColor={T.red}/>
+    </Card>
+  );
+};
+
+const TabOverview=({m,site,rawRows})=>{
   const [prodView,setProdView]=useState("sku");
   const products=prodView==="sku"?[...m.skuList].sort((a,b)=>b.revenue-a.revenue):[...m.productList].sort((a,b)=>b.revenue-a.revenue);
   const brandCols=[
@@ -571,6 +720,9 @@ const TabOverview=({m})=>{
         <Kpi icon="ti-receipt"         label="Conv Rate"  value={fPct(m.convRate)} ok={m.convRate>=.03} bad={m.convRate>0&&m.convRate<.01} sub="Session→Purchase"/>
         <Kpi icon="ti-ad-2"            label="Total ROAS" value={fX(m.totalROAS)} ok={m.totalROAS>=3} bad={m.totalROAS>0&&m.totalROAS<1} sub={`${fUsd(m.totalAdSpend)} spent`} mono/>
       </div>
+
+      {/* Revenue by Website — only in All mode */}
+      {site==="all"&&<RevenueByWebsite rawRows={rawRows}/>}
 
       {/* Brand + Top Products FIRST */}
       <Card title="Brand Performance — Top 10" icon="ti-building-store"
@@ -634,6 +786,12 @@ const TabAds=({m,site})=>{
     {k:"ctr",label:"CTR",r:true,render:p=>fPct(ch==="gg"?p.ggCtr:p.fbCtr)},
     {k:"cr",label:"Conv Rate",r:true,render:p=>fPct(ch==="gg"?p.ggConvRate:p.fbConvRate)},
     {k:"margin",label:"Margin",r:true,render:p=>fPct(p.margin)},
+    {k:"profitAfterAds",label:"Profit after Ads",r:true,render:p=>{
+      const rev=ch==="gg"?p.revenueGG:p.revenueFB;
+      const spend=ch==="gg"?p.ggSpend:p.fbSpend;
+      const profit=p.margin?rev*p.margin-spend:null;
+      return profit==null?"—":<span style={{color:profit>=0?T.green:T.red,fontWeight:600}}>{fUsd(profit)}</span>;
+    }},
   ];
 
   const ggROAS=m.totalGGSpend>0?m.totalRevenueGG/m.totalGGSpend:null;
@@ -673,18 +831,29 @@ const TabAds=({m,site})=>{
               <th style={{padding:"6px 10px",color:T.purple,textAlign:"right",borderBottom:`1px solid ${T.line1}`}}>FB (Platform)</th>
             </tr></thead>
             <tbody>
-              {[
-                ["Spend",...(hasGG?[fUsd(m.totalGGSpend),fUsd(m.totalGGSpend)]:[]),fUsd(m.totalFBSpend),fUsd(m.totalFBSpend)],
-                ["Revenue",...(hasGG?[fUsd(m.totalRevenueGG),fUsd(m.totalGGValue)]:[]),fUsd(m.totalRevenueFB),"— soon"],
-                ["ROAS",...(hasGG?[fX(ggROAS),fX(ggROASP)]:[]),fX(fbROAS),"— soon"],
-                ["Purchases",...(hasGG?[fNum(m.totalUnitsGG),fNum(m.totalGGConv)]:[]),fNum(m.totalUnitsFB),"— soon"],
-                ["CPA",...(hasGG?[fUsd(ggCPA),fUsd(ggCPAP)]:[]),fUsd(fbCPA),"— soon"],
-                ["Sessions",...(hasGG?[fNum(m.totalSessionsGG),"—"]:[]),fNum(m.totalSessionsFB),"—"],
-                ["Clicks",...(hasGG?[fNum(m.totalGGClick),fNum(m.totalGGClick)]:["—","—"]),fNum(m.totalFBClicks),fNum(m.totalFBClicks)],
-                ["Impressions",...(hasGG?[fNum(m.totalGGImp),fNum(m.totalGGImp)]:["—","—"]),fNum(m.totalFBImp),fNum(m.totalFBImp)],
-                ["CTR",...(hasGG?["—",fPct(ggCTR)]:["—","—"]),"—",fPct(fbCTR)],
-                ["Conv Rate",...(hasGG?[fPct(ggCRGA4),fPct(ggCRP)]:[]),fPct(fbCRGA4),"— soon"],
-              ].map((row,i)=>{
+              {(hasGG?[
+                ["Spend",fUsd(m.totalGGSpend),fUsd(m.totalGGSpend),fUsd(m.totalFBSpend),fUsd(m.totalFBSpend)],
+                ["Revenue",fUsd(m.totalRevenueGG),fUsd(m.totalGGValue),fUsd(m.totalRevenueFB),"— soon"],
+                ["ROAS",fX(ggROAS),fX(ggROASP),fX(fbROAS),"— soon"],
+                ["Purchases",fNum(m.totalUnitsGG),fNum(m.totalGGConv),fNum(m.totalUnitsFB),"— soon"],
+                ["CPA",fUsd(ggCPA),fUsd(ggCPAP),fUsd(fbCPA),"— soon"],
+                ["Sessions",fNum(m.totalSessionsGG),"—",fNum(m.totalSessionsFB),"—"],
+                ["Clicks",fNum(m.totalGGClick),fNum(m.totalGGClick),"—",fNum(m.totalFBClicks)],
+                ["Impressions",fNum(m.totalGGImp),fNum(m.totalGGImp),"—",fNum(m.totalFBImp)],
+                ["CTR","—",fPct(ggCTR),"—",fPct(fbCTR)],
+                ["Conv Rate",fPct(ggCRGA4),fPct(ggCRP),fPct(fbCRGA4),"— soon"],
+              ]:[
+                ["Spend",fUsd(m.totalFBSpend),fUsd(m.totalFBSpend)],
+                ["Revenue",fUsd(m.totalRevenueFB),"— soon"],
+                ["ROAS",fX(fbROAS),"— soon"],
+                ["Purchases",fNum(m.totalUnitsFB),"— soon"],
+                ["CPA",fUsd(fbCPA),"— soon"],
+                ["Sessions",fNum(m.totalSessionsFB),"—"],
+                ["Clicks","—",fNum(m.totalFBClicks)],
+                ["Impressions","—",fNum(m.totalFBImp)],
+                ["CTR","—",fPct(fbCTR)],
+                ["Conv Rate",fPct(fbCRGA4),"— soon"],
+              ]).map((row,i)=>{
                 const [label,...vals]=row;
                 return(
                   <tr key={i} className="row-hover" style={{background:i%2===0?"transparent":T.bg2+"88"}}>
@@ -737,6 +906,7 @@ const TabAds=({m,site})=>{
           {k:"margin",label:"Margin",r:true,render:p=>fPct(p.margin)},
         ]} rows={ch==="gg"?ggScale:fbScale}/>
       </Card>
+      <BudgetAllocation m={m}/>
     </>
   );
 };
@@ -803,6 +973,8 @@ const TabHealth=({m})=>{
           {k:"action",label:"Action",render:p=>{const a=getAction(p);return <span style={{fontSize:11,color:a.color}}>{a.icon} {a.text}</span>;}},
         ]} rows={section3}/>
       </Card>
+      <MarginAnalysis m={m}/>
+      <MAPCompliance m={m}/>
     </>
   );
 };
@@ -816,6 +988,7 @@ const TabInventory=({m,range})=>{
   const outStock=m.skuList.filter(p=>p.stock<=0).length;
   const lowStock=m.skuList.filter(p=>p.stock>0&&p.stock<=5).length;
   const totalStockVal=m.skuList.reduce((s,p)=>s+p.stock*p.cost,0);
+  const deadStockVal=m.skuList.filter(p=>p.units===0&&p.stock>0).reduce((s,p)=>s+p.stock*p.cost,0);
   const outItems=[...m.skuList].filter(p=>p.stock<=0).sort((a,b)=>b.revenue-a.revenue);
   const lowItems=[...m.skuList].filter(p=>p.stock>0&&p.stock<=5).sort((a,b)=>b.revenue-a.revenue);
   const healthyItems=[...m.skuList].filter(p=>p.stock>5).sort((a,b)=>b.revenue-a.revenue);
@@ -839,12 +1012,13 @@ const TabInventory=({m,range})=>{
   ];
   return(
     <>
-      <div style={{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:8,marginBottom:12}} className="fade">
-        <Kpi icon="ti-packages"        label="Total SKUs"       value={fNum(m.skuList.length)} mono/>
-        <Kpi icon="ti-circle-check"    label="In Stock"         value={fNum(inStock)} ok sub={`${fPct(inStock/m.skuList.length)} of catalog`} mono/>
-        <Kpi icon="ti-circle-x"        label="Out of Stock"     value={fNum(outStock)} bad={outStock>0} sub="Losing sales" mono/>
-        <Kpi icon="ti-alert-triangle"  label="Low Stock (≤5)"   value={fNum(lowStock)} bad={lowStock>0} sub="Restock soon" mono/>
-        <Kpi icon="ti-currency-dollar" label="Total Stock Value" value={fUsd(totalStockVal)} sub="Stock × Cost" mono/>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(6,1fr)",gap:8,marginBottom:12}} className="fade">
+        <Kpi icon="ti-packages"        label="Total SKUs"        value={fNum(m.skuList.length)} mono/>
+        <Kpi icon="ti-circle-check"    label="In Stock"          value={fNum(inStock)} ok sub={`${fPct(inStock/m.skuList.length)} of catalog`} mono/>
+        <Kpi icon="ti-circle-x"        label="Out of Stock"      value={fNum(outStock)} bad={outStock>0} sub="Losing sales" mono/>
+        <Kpi icon="ti-alert-triangle"  label="Low Stock (≤5)"    value={fNum(lowStock)} bad={lowStock>0} sub="Restock soon" mono/>
+        <Kpi icon="ti-currency-dollar" label="Total Stock Value"  value={fUsd(totalStockVal)} sub="Stock × Cost" mono/>
+        <Kpi icon="ti-archive"         label="Dead Stock Value"   value={fUsd(deadStockVal)} bad={deadStockVal>0} sub="Units=0, has stock" mono/>
       </div>
       <Card title="Stock Health Breakdown" icon="ti-heart-rate"
         tooltip={`🔴 Out of Stock: sort by Revenue DESC\n🟡 Low Stock (0-5): sort by Revenue DESC\n🟢 Healthy (>5): sort by Revenue DESC\n⚫ Slow Moving (Stock>20, Units<2): sort by Stock Value DESC`}>
@@ -959,7 +1133,7 @@ export default function App() {
           </div>
         ):(
           <div className="fade">
-            {tab==="overview"  &&<TabOverview m={metrics}/>}
+            {tab==="overview"  &&<TabOverview m={metrics} site={site} rawRows={rawRows}/>}
             {tab==="ads"       &&<TabAds m={metrics} site={site}/>}
             {tab==="health"    &&<TabHealth m={metrics}/>}
             {tab==="inventory" &&<TabInventory m={metrics} range={range}/>}
