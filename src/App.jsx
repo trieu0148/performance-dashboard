@@ -11,6 +11,14 @@ const T = {
 const FONT = "'Syne', sans-serif";
 const MONO = "'DM Mono', monospace";
 const PASSWORD = "car2026";
+const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxG9t2h7Wl-EzTFGWJP7P9NvRZ--H05TMmxuwwafNgMCm-9vPy7CrMIJImwqukDKwZE/exec";
+
+const SITES = [
+  { key: "all", label: "All" },
+  { key: "DRC", label: "Direct RC" },
+  { key: "HD",  label: "HeliDirect" },
+  { key: "Fur", label: "FuritekUSA" },
+];
 
 const fUsd = v => v==null?"—":v>=1000?`$${(v/1000).toFixed(1)}k`:`$${v.toFixed(2)}`;
 const fNum = v => v==null?"—":v>=1000?`${(v/1000).toFixed(1)}k`:String(Math.round(v));
@@ -31,27 +39,55 @@ function parseCSV(text) {
   });
 }
 
-function detectCols(headers) {
+// ── Column detection per site ─────────────────────────────────────────────────
+function detectCols(headers, site) {
   const lc=s=>s.toLowerCase();
   const exact=key=>headers.find(h=>lc(h)===lc(key))||null;
+  const pre=key=>site==="all"?null:exact(`${site}-${key}`);
+
+  // For "all" mode, we collect all site prefixes
+  const sites = ["DRC","HD","Fur"];
+
+  if (site === "all") {
+    return {
+      sku: exact("SKU"), name: exact("Product Name"), brand: exact("Brand"),
+      type: exact("Type"), stock: exact("Stock"), cost: exact("Cost"),
+      price: exact("MAP Price"), margin: exact("Margin"),
+      // GA4 — we'll sum across sites in compute
+      _multi: true,
+      _sites: sites,
+    };
+  }
+
+  const p = site;
   return {
-    sku:exact("SKU"),name:exact("Product Name"),brand:exact("Brand"),type:exact("Type"),
-    stock:exact("Stock"),cost:exact("Cost"),price:exact("MAP Price"),margin:exact("Margin"),
-    sessions:exact("GA4-Sessions"),revenue:exact("GA4-Item revenue"),
-    units:exact("GA4-Items purchased"),atc:exact("GA4-Items added to cart"),
-    checkout:exact("GA4-Items checked out"),
-    sessionsGG:exact("GA4-Sessions-Google Ads"),unitsGG:exact("GA4-Items purchased-Google Ads"),
-    revenueGG:exact("GA4-Item revenue-Google Ads"),
-    sessionsFB:exact("GA4-Sessions-Facebook ads"),unitsFB:exact("GA4-Items purchased-Facebook Ads"),
-    revenueFB:exact("GA4-Item revenue-Facebook Ads"),
-    ggSpend:exact("Google Ads-Amount spent"),ggConv:exact("Google Ads-Conv"),
-    ggValue:exact("Google Ads-Value"),ggClick:exact("Google Ads-Click"),
-    ggImp:exact("Google Ads-Imp"),fbSpend:exact("Facebook Ads-Amount spent"),
-    fbClicks:exact("Facebook Ads-Link clicks"),fbImp:exact("Facebook Ads-Impressions"),
+    sku: exact("SKU"), name: exact("Product Name"), brand: exact("Brand"),
+    type: exact("Type"), stock: exact("Stock"), cost: exact("Cost"),
+    price: exact("MAP Price"), margin: exact("Margin"),
+    sessions:    exact(`${p}-GA4-Sessions`),
+    revenue:     exact(`${p}-GA4-Item revenue`),
+    units:       exact(`${p}-GA4-Items purchased`),
+    atc:         exact(`${p}-GA4-Items added to cart`),
+    checkout:    exact(`${p}-GA4-Items checked out`),
+    sessionsGG:  exact(`${p}-GA4-Sessions-Google Ads`),
+    unitsGG:     exact(`${p}-GA4-Items purchased-Google Ads`),
+    revenueGG:   exact(`${p}-GA4-Item revenue-Google Ads`),
+    sessionsFB:  exact(`${p}-GA4-Sessions-Facebook ads`),
+    unitsFB:     exact(`${p}-GA4-Items purchased-Facebook Ads`),
+    revenueFB:   exact(`${p}-GA4-Item revenue-Facebook Ads`),
+    ggSpend:     exact(`${p}-Google Ads-Amount spent`),
+    ggConv:      exact(`${p}-Google Ads-Conv`),
+    ggValue:     exact(`${p}-Google Ads-Value`),
+    ggClick:     exact(`${p}-Google Ads-Click`),
+    ggImp:       exact(`${p}-Google Ads-Imp`),
+    fbSpend:     exact(`${p}-Facebook Ads-Amount spent`),
+    fbClicks:    exact(`${p}-Facebook Ads-Link clicks`),
+    fbImp:       exact(`${p}-Facebook Ads-Impressions`),
   };
 }
 
-function compute(rows,cols) {
+// ── Compute for a single site ─────────────────────────────────────────────────
+function computeSingle(rows, cols) {
   const valid=rows.filter(r=>r[cols.sku]&&r[cols.sku]!==""&&r[cols.sku]!=="#REF!"&&r[cols.sku]!=="SKU");
   const get=(r,c)=>c?n(r[c]):0;
   const getpct=(r,c)=>c?pct(r[c]):0;
@@ -90,12 +126,95 @@ function compute(rows,cols) {
     const m=getpct(r,cols.margin); if(m>0&&m<=1) p.margins.push(m);
   });
 
+  return {totalRevenue,totalUnits,totalSessions,totalATC,totalCheckout,
+    totalGGSpend,totalFBSpend,totalAdSpend,totalRevenueGG,totalRevenueFB,totalAdRevenue,
+    totalUnitsGG,totalUnitsFB,totalAdUnits,totalSessionsGG,totalSessionsFB,
+    totalGGClick,totalFBClicks,totalGGImp,totalFBImp,totalGGConv,totalGGValue,
+    avgMargin,totalROAS,convRate,atcRate,totalCPA,negMargin,skuMap};
+}
+
+// ── Compute for "all" sites ───────────────────────────────────────────────────
+function computeAll(rows, headers) {
+  const sites=["DRC","HD","Fur"];
+  const colsBySite={};
+  sites.forEach(s=>{ colsBySite[s]=detectCols(headers,s); });
+
+  const valid=rows.filter(r=>{
+    const sku=r["SKU"];
+    return sku&&sku!==""&&sku!=="#REF!"&&sku!=="SKU";
+  });
+
+  const get=(r,c)=>c?n(r[c]):0;
+  const getpct=(r,c)=>c?pct(r[c]):0;
+
+  let totalRevenue=0,totalUnits=0,totalSessions=0,totalATC=0,totalCheckout=0;
+  let totalGGSpend=0,totalFBSpend=0,totalRevenueGG=0,totalRevenueFB=0;
+  let totalUnitsGG=0,totalUnitsFB=0,totalSessionsGG=0,totalSessionsFB=0;
+  let totalGGClick=0,totalFBClicks=0,totalGGImp=0,totalFBImp=0,totalGGConv=0,totalGGValue=0;
+
+  const skuMap={};
+  valid.forEach(r=>{
+    const k=r["SKU"];
+    if(!skuMap[k]) skuMap[k]={sku:k,name:r["Product Name"]||k,brand:r["Brand"]||"",
+      type:r["Type"]||"",stock:0,cost:0,price:0,margins:[],
+      revenue:0,units:0,sessions:0,atc:0,checkout:0,
+      revenueGG:0,unitsGG:0,sessionsGG:0,revenueFB:0,unitsFB:0,sessionsFB:0,
+      ggSpend:0,ggConv:0,ggValue:0,ggClick:0,ggImp:0,fbSpend:0,fbClicks:0,fbImp:0};
+    const p=skuMap[k];
+
+    sites.forEach(s=>{
+      const c=colsBySite[s];
+      p.revenue    +=get(r,c.revenue);    p.units      +=get(r,c.units);
+      p.sessions   +=get(r,c.sessions);   p.atc        +=get(r,c.atc);
+      p.checkout   +=get(r,c.checkout);   p.revenueGG  +=get(r,c.revenueGG);
+      p.unitsGG    +=get(r,c.unitsGG);    p.sessionsGG +=get(r,c.sessionsGG);
+      p.revenueFB  +=get(r,c.revenueFB);  p.unitsFB    +=get(r,c.unitsFB);
+      p.sessionsFB +=get(r,c.sessionsFB); p.ggSpend    +=get(r,c.ggSpend);
+      p.ggConv     +=get(r,c.ggConv);     p.ggValue    +=get(r,c.ggValue);
+      p.ggClick    +=get(r,c.ggClick);    p.ggImp      +=get(r,c.ggImp);
+      p.fbSpend    +=get(r,c.fbSpend);    p.fbClicks   +=get(r,c.fbClicks);
+      p.fbImp      +=get(r,c.fbImp);
+    });
+    p.stock+=get(r,"Stock"); p.cost=get(r,"Cost")||p.cost; p.price=get(r,"MAP Price")||p.price;
+    const m=getpct(r,"Margin"); if(m>0&&m<=1) p.margins.push(m);
+  });
+
+  Object.values(skuMap).forEach(p=>{
+    totalRevenue+=p.revenue; totalUnits+=p.units; totalSessions+=p.sessions;
+    totalATC+=p.atc; totalCheckout+=p.checkout;
+    totalGGSpend+=p.ggSpend; totalFBSpend+=p.fbSpend;
+    totalRevenueGG+=p.revenueGG; totalRevenueFB+=p.revenueFB;
+    totalUnitsGG+=p.unitsGG; totalUnitsFB+=p.unitsFB;
+    totalSessionsGG+=p.sessionsGG; totalSessionsFB+=p.sessionsFB;
+    totalGGClick+=p.ggClick; totalFBClicks+=p.fbClicks;
+    totalGGImp+=p.ggImp; totalFBImp+=p.fbImp;
+    totalGGConv+=p.ggConv; totalGGValue+=p.ggValue;
+  });
+
+  const totalAdSpend=totalGGSpend+totalFBSpend;
+  const totalAdRevenue=totalRevenueGG+totalRevenueFB;
+  const totalAdUnits=totalUnitsGG+totalUnitsFB;
+  const margins=valid.map(r=>getpct(r,"Margin")).filter(v=>v>0&&v<=1);
+  const avgMargin=margins.length?margins.reduce((a,b)=>a+b,0)/margins.length:null;
+  const totalROAS=totalAdSpend>0?totalAdRevenue/totalAdSpend:null;
+  const convRate=totalSessions>0?totalUnits/totalSessions:null;
+  const atcRate=totalSessions>0?totalATC/totalSessions:null;
+  const totalCPA=totalAdUnits>0?totalAdSpend/totalAdUnits:null;
+  const negMargin=valid.filter(r=>getpct(r,"Margin")<0).length;
+
+  return {totalRevenue,totalUnits,totalSessions,totalATC,totalCheckout,
+    totalGGSpend,totalFBSpend,totalAdSpend,totalRevenueGG,totalRevenueFB,totalAdRevenue,
+    totalUnitsGG,totalUnitsFB,totalAdUnits,totalSessionsGG,totalSessionsFB,
+    totalGGClick,totalFBClicks,totalGGImp,totalFBImp,totalGGConv,totalGGValue,
+    avgMargin,totalROAS,convRate,atcRate,totalCPA,negMargin,skuMap};
+}
+
+// ── Enrich SKU list ───────────────────────────────────────────────────────────
+function enrichAndFinalize(skuMap) {
   const enrichSku=p=>{
     const margin=p.margins.length?p.margins.reduce((a,b)=>a+b,0)/p.margins.length:null;
     const adSpend=p.ggSpend+p.fbSpend,adRevenue=p.revenueGG+p.revenueFB,adUnits=p.unitsGG+p.unitsFB;
-    // BE ROAS = MAP Price / (MAP Price - Cost)
     const beRoas=(p.price>0&&p.cost>0&&p.price>p.cost)?p.price/(p.price-p.cost):margin>0?1/margin:null;
-    // Max CPA = MAP Price - Cost
     const maxCpa=(p.price>0&&p.cost>0)?p.price-p.cost:null;
     const roas=adSpend>0?adRevenue/adSpend:null;
     const cpa=adUnits>0?adSpend/adUnits:null;
@@ -146,7 +265,13 @@ function compute(rows,cols) {
     const roas=adSpend>0?adRev/adSpend:null;
     const atcRate=b.sessions>0?b.atc/b.sessions:null,convRate=b.sessions>0?b.units/b.sessions:null;
     const hiRev=b.revenue>=brandRevMedian,hiMar=(margin||0)>=0.35;
-    const label=hiRev&&hiMar?"star":hiRev&&!hiMar?"cashcow":!hiRev&&hiMar?"gem":"risk";
+    // Hidden Gem requires units >= 3
+    let label;
+    if(b.revenue===0) label="nosales";
+    else if(hiRev&&hiMar) label="star";
+    else if(hiRev&&!hiMar) label="cashcow";
+    else if(!hiRev&&hiMar&&b.units>=3) label="gem";
+    else label="risk";
     return {...b,margin,adSpend,adRev,adUnits,roas,atcRate,convRate,label};
   }).sort((a,b)=>b.revenue-a.revenue);
   const brandList=allBrands.slice(0,10);
@@ -156,23 +281,31 @@ function compute(rows,cols) {
   const quadrant=p=>{
     if(p.revenue===0) return "nosales";
     const h=p.revenue>=revMedian,m=(p.margin||0)>=0.35;
-    return h&&m?"star":h&&!m?"cashcow":!h&&m?"gem":"risk";
+    if(h&&m) return "star";
+    if(h&&!m) return "cashcow";
+    if(!h&&m&&p.units>=3) return "gem";
+    return "risk";
   };
 
   const funnelTrafficATC=skuList.filter(p=>p.sessions>=10).sort((a,b)=>b.sessions-a.sessions);
   const funnelATCCheckout=skuList.filter(p=>p.atc>=3).map(p=>({...p,checkoutRate:p.atc>0?p.checkout/p.atc:null})).sort((a,b)=>b.atc-a.atc);
   const funnelCheckoutPurchase=skuList.filter(p=>p.checkout>=2).map(p=>({...p,purchaseRate:p.checkout>0?p.units/p.checkout:null})).sort((a,b)=>b.checkout-a.checkout);
 
-  return {
-    totalRevenue,totalUnits,totalSessions,totalATC,totalCheckout,
-    totalGGSpend,totalFBSpend,totalAdSpend,totalRevenueGG,totalRevenueFB,totalAdRevenue,
-    totalUnitsGG,totalUnitsFB,totalAdUnits,totalSessionsGG,totalSessionsFB,
-    totalGGClick,totalFBClicks,totalGGImp,totalFBImp,totalGGConv,totalGGValue,
-    avgMargin,totalROAS,convRate,atcRate,totalCPA,negMargin,
-    skuList,productList,brandList,allBrands,brandRevMedian,
-    funnelTrafficATC,funnelATCCheckout,funnelCheckoutPurchase,
-    quadrant,revMedian,
-  };
+  return {skuList,productList,brandList,allBrands,brandRevMedian,
+    funnelTrafficATC,funnelATCCheckout,funnelCheckoutPurchase,quadrant,revMedian};
+}
+
+function compute(rows, site) {
+  const headers = rows.length ? Object.keys(rows[0]) : [];
+  let base;
+  if (site === "all") {
+    base = computeAll(rows, headers);
+  } else {
+    const cols = detectCols(headers, site);
+    base = computeSingle(rows, cols);
+  }
+  const enriched = enrichAndFinalize(base.skuMap);
+  return { ...base, ...enriched };
 }
 
 const css=`*{box-sizing:border-box;margin:0;padding:0}body{background:#080a0f;font-family:'Syne',sans-serif;color:#e8edf5;min-height:100vh}::-webkit-scrollbar{width:4px;height:4px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:#243040;border-radius:2px}@keyframes fadeIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}.fade{animation:fadeIn .3s ease both}.row-hover:hover td{background:#13181f!important}.tab-btn:hover{border-color:#3b7ff5!important;color:#e8edf5!important}.info-tooltip{position:relative;display:inline-flex;align-items:center}.info-tooltip .tip{display:none;position:absolute;top:100%;left:0;z-index:99;background:#1a2030;border:1px solid #243040;border-radius:8px;padding:10px 14px;min-width:280px;font-size:11px;line-height:1.7;color:#a0aec0;white-space:pre-line;margin-top:4px}.info-tooltip:hover .tip{display:block}.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:200;display:flex;align-items:center;justify-content:center}.modal-box{background:#0d1117;border:1px solid #243040;border-radius:14px;padding:20px;width:700px;max-height:82vh;display:flex;flex-direction:column}.modal-body{overflow-y:auto;flex:1}`;
@@ -210,9 +343,14 @@ const Tag=({color,children})=>(<span style={{fontSize:10,padding:"2px 8px",borde
 const Empty=({icon="ti-database-off",msg="No data"})=>(<div style={{textAlign:"center",padding:"2rem",color:T.text2,fontSize:13}}><i className={`ti ${icon}`} style={{fontSize:28,display:"block",marginBottom:8,opacity:.4}}/>{msg}</div>);
 const NavTab=({label,icon,active,onClick})=>(<button onClick={onClick} className="tab-btn" style={{display:"flex",alignItems:"center",gap:6,padding:"7px 14px",fontSize:12,fontFamily:FONT,borderRadius:8,border:`1px solid ${active?T.blue:T.line1}`,cursor:"pointer",background:active?T.blue:"transparent",color:active?"#fff":T.text1,transition:"all .15s"}}><i className={`ti ${icon}`} style={{fontSize:13}}/>{label}</button>);
 const SubTab=({label,active,onClick})=>(<button onClick={onClick} style={{padding:"5px 12px",fontSize:11,fontFamily:FONT,borderRadius:6,border:`1px solid ${active?T.cyan:T.line1}`,cursor:"pointer",background:active?T.cyan+"22":"transparent",color:active?T.cyan:T.text2,transition:"all .15s"}}>{label}</button>);
-const BrandLabel=({label})=>{const map={star:["⭐ Star",T.green],cashcow:["💰 Cash Cow",T.yellow],gem:["💎 Hidden Gem",T.cyan],risk:["⚠️ At Risk",T.red]};const[text,color]=map[label]||["—",T.text2];return <Tag color={color}>{text}</Tag>;};
 const rateColor=(v,low,mid)=>v==null?T.text2:v<low?T.red:v<mid?T.yellow:T.green;
 const rc=v=>rateColor(v,0.05,0.10);
+
+const BrandLabel=({label})=>{
+  const map={star:["⭐ Star",T.green],cashcow:["💰 Cash Cow",T.yellow],gem:["💎 Hidden Gem",T.cyan],risk:["⚠️ At Risk",T.red],nosales:["🚫 No Sales Yet",T.text2]};
+  const[text,color]=map[label]||["—",T.text2];
+  return <Tag color={color}>{text}</Tag>;
+};
 
 function getAction(p){
   if(p.stock<=0) return{icon:"🚨",text:"Out of stock — restock now",color:T.red};
@@ -249,15 +387,25 @@ const SearchModal=({title,color,allItems,cols,onClose})=>{
   );
 };
 
-const Tbl=({cols:tcols,rows,max=10})=>{
+const Tbl=({cols:tcols,rows,max=10,showMore=false,allRows,modalTitle,modalColor})=>{
+  const [showModal,setShowModal]=useState(false);
   if(!rows?.length) return <Empty/>;
+  const all=allRows||rows;
   return(
-    <div style={{overflowX:"auto"}}>
-      <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
-        <thead><tr>{tcols.map(c=>(<th key={c.k} style={{textAlign:c.r?"right":"left",padding:"6px 10px",color:T.text2,fontWeight:500,borderBottom:`1px solid ${T.line1}`,whiteSpace:"nowrap"}}>{c.label}</th>))}</tr></thead>
-        <tbody>{rows.slice(0,max).map((row,i)=>(<tr key={i} className="row-hover" style={{background:i%2===0?"transparent":T.bg2+"88"}}>{tcols.map(c=>(<td key={c.k} style={{padding:"7px 10px",borderBottom:`1px solid ${T.line1}`,textAlign:c.r?"right":"left",color:T.text0,whiteSpace:c.wrap?"normal":"nowrap",maxWidth:c.wrap?200:undefined}}>{c.render?c.render(row):row[c.k]}</td>))}</tr>))}</tbody>
-      </table>
-    </div>
+    <>
+      <div style={{overflowX:"auto"}}>
+        <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+          <thead><tr>{tcols.map(c=>(<th key={c.k} style={{textAlign:c.r?"right":"left",padding:"6px 10px",color:T.text2,fontWeight:500,borderBottom:`1px solid ${T.line1}`,whiteSpace:"nowrap"}}>{c.label}</th>))}</tr></thead>
+          <tbody>{rows.slice(0,max).map((row,i)=>(<tr key={i} className="row-hover" style={{background:i%2===0?"transparent":T.bg2+"88"}}>{tcols.map(c=>(<td key={c.k} style={{padding:"7px 10px",borderBottom:`1px solid ${T.line1}`,textAlign:c.r?"right":"left",color:T.text0,whiteSpace:c.wrap?"normal":"nowrap",maxWidth:c.wrap?200:undefined}}>{c.render?c.render(row):row[c.k]}</td>))}</tr>))}</tbody>
+        </table>
+      </div>
+      {showMore&&all.length>max&&(
+        <button onClick={()=>setShowModal(true)} style={{marginTop:10,fontSize:11,color:modalColor||T.blue,background:"none",border:`1px solid ${(modalColor||T.blue)+"33"}`,borderRadius:6,padding:"3px 10px",cursor:"pointer",fontFamily:FONT}}>
+          +{all.length-max} more
+        </button>
+      )}
+      {showModal&&<SearchModal title={modalTitle||"All"} color={modalColor||T.blue} allItems={all} cols={tcols} onClose={()=>setShowModal(false)}/>}
+    </>
   );
 };
 
@@ -309,7 +457,7 @@ const QuadCard=({label,count,items})=>{
   const map={
     star:{icon:"⭐ Star",color:T.green,desc:"Revenue ≥ median AND Margin ≥ 35%"},
     cashcow:{icon:"💰 Cash Cow",color:T.yellow,desc:"Revenue ≥ median AND Margin < 35%"},
-    gem:{icon:"💎 Hidden Gem",color:T.cyan,desc:"0 < Revenue < median AND Margin ≥ 35%"},
+    gem:{icon:"💎 Hidden Gem",color:T.cyan,desc:"0 < Revenue < median AND Margin ≥ 35% AND Units ≥ 3"},
     risk:{icon:"⚠️ At Risk",color:T.red,desc:"0 < Revenue < median AND Margin < 35%"},
     nosales:{icon:"🚫 No Sales Yet",color:T.text2,desc:"Revenue = 0 — no orders this period"},
   };
@@ -384,16 +532,9 @@ const PasswordScreen=({onAuth})=>{
   return(<div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:T.bg0}}><div style={{background:T.bg1,border:`1px solid ${T.line1}`,borderRadius:16,padding:"40px 48px",width:340,textAlign:"center"}}><i className="ti ti-lock" style={{fontSize:32,color:T.blue,marginBottom:16,display:"block"}}/><div style={{fontSize:18,fontWeight:700,color:T.text0,marginBottom:6}}>RC Performance Dashboard</div><div style={{fontSize:12,color:T.text2,marginBottom:24}}>Enter password to continue</div><input type="password" value={val} onChange={e=>setVal(e.target.value)} onKeyDown={e=>e.key==="Enter"&&submit()} placeholder="Password" autoFocus style={{width:"100%",padding:"10px 14px",borderRadius:8,border:`1px solid ${err?T.red:T.line2}`,background:T.bg2,color:T.text0,fontSize:14,fontFamily:FONT,outline:"none",marginBottom:12}}/>{err&&<div style={{fontSize:12,color:T.red,marginBottom:8}}>Incorrect password</div>}<button onClick={submit} style={{width:"100%",padding:"10px",borderRadius:8,background:T.blue,color:"#fff",border:"none",fontSize:13,fontFamily:FONT,fontWeight:600,cursor:"pointer"}}>Unlock</button></div></div>);
 };
 
-const SetupScreen=({onLoad})=>{
-  const [url,setUrl]=useState(localStorage.getItem("rc_apps_script_url")||"");
-  const [loading,setLoading]=useState(false); const [err,setErr]=useState("");
-  const load=async()=>{if(!url.trim()) return;setLoading(true);setErr("");try{const res=await fetch(`${url.trim()}?range=mtd`);const text=await res.text();localStorage.setItem("rc_apps_script_url",url.trim());onLoad(url.trim(),text);}catch(e){setErr("Cannot connect. Check URL and CORS settings.");}setLoading(false);};
-  return(<div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:T.bg0}}><div style={{background:T.bg1,border:`1px solid ${T.line1}`,borderRadius:16,padding:"40px 48px",width:480}}><i className="ti ti-table" style={{fontSize:28,color:T.blue,marginBottom:14,display:"block"}}/><div style={{fontSize:18,fontWeight:700,color:T.text0,marginBottom:6}}>Connect Google Sheet</div><div style={{fontSize:12,color:T.text2,marginBottom:20}}>Paste your Apps Script Web App URL below</div><input value={url} onChange={e=>setUrl(e.target.value)} onKeyDown={e=>e.key==="Enter"&&load()} placeholder="https://script.google.com/macros/s/..." style={{width:"100%",padding:"10px 14px",borderRadius:8,border:`1px solid ${T.line2}`,background:T.bg2,color:T.text0,fontSize:12,fontFamily:MONO,outline:"none",marginBottom:10}}/>{err&&<div style={{fontSize:12,color:T.red,marginBottom:8}}>{err}</div>}<button onClick={load} disabled={loading} style={{width:"100%",padding:"10px",borderRadius:8,background:T.blue,color:"#fff",border:"none",fontSize:13,fontFamily:FONT,fontWeight:600,cursor:"pointer",opacity:loading?.6:1}}>{loading?"Connecting...":"Load Dashboard"}</button></div></div>);
-};
-
-const TabPerformance=({m})=>{
+// ── TAB: OVERVIEW ─────────────────────────────────────────────────────────────
+const TabOverview=({m})=>{
   const [prodView,setProdView]=useState("sku");
-  const [showBrandModal,setShowBrandModal]=useState(false);
   const products=prodView==="sku"?[...m.skuList].sort((a,b)=>b.revenue-a.revenue):[...m.productList].sort((a,b)=>b.revenue-a.revenue);
   const brandCols=[
     {k:"name",label:"Brand",render:p=><span style={{fontWeight:600}}>{p.name}</span>},
@@ -430,6 +571,22 @@ const TabPerformance=({m})=>{
         <Kpi icon="ti-receipt"         label="Conv Rate"  value={fPct(m.convRate)} ok={m.convRate>=.03} bad={m.convRate>0&&m.convRate<.01} sub="Session→Purchase"/>
         <Kpi icon="ti-ad-2"            label="Total ROAS" value={fX(m.totalROAS)} ok={m.totalROAS>=3} bad={m.totalROAS>0&&m.totalROAS<1} sub={`${fUsd(m.totalAdSpend)} spent`} mono/>
       </div>
+
+      {/* Brand + Top Products FIRST */}
+      <Card title="Brand Performance — Top 10" icon="ti-building-store"
+        tooltip={`Sort: Revenue DESC\nMedian revenue: ${medianUsd}\n⭐ Star: Rev ≥ ${medianUsd} AND Margin ≥ 35%\n💰 Cash Cow: Rev ≥ ${medianUsd} AND Margin < 35%\n💎 Hidden Gem: 0 < Rev < ${medianUsd} AND Margin ≥ 35% AND Units ≥ 3\n⚠️ At Risk: 0 < Rev < ${medianUsd} AND Margin < 35%\n🚫 No Sales Yet: Revenue = 0`}>
+        <Tbl max={10} cols={brandCols} rows={m.brandList} showMore allRows={m.allBrands} modalTitle="All Brands" modalColor={T.blue}/>
+      </Card>
+
+      <Card title="Top Products — Revenue" icon="ti-trophy" tooltip={`Sort: Revenue DESC\nConv Rate = GA4-Purchased / GA4-Sessions`}>
+        <div style={{display:"flex",gap:6,marginBottom:10}}>
+          <SubTab label="By SKU" active={prodView==="sku"} onClick={()=>setProdView("sku")}/>
+          <SubTab label="By Product Name" active={prodView==="product"} onClick={()=>setProdView("product")}/>
+        </div>
+        <Tbl max={10} cols={prodCols} rows={products} showMore allRows={products} modalTitle="All Products" modalColor={T.blue}/>
+      </Card>
+
+      {/* Funnel BELOW */}
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:12,marginBottom:0}}>
         <Card title="Overall Funnel" icon="ti-funnel" sub="Sessions → ATC → Checkout → Purchase">
           <FunnelViz sessions={m.totalSessions} atc={m.totalATC} checkout={m.totalCheckout} units={m.totalUnits}/>
@@ -438,35 +595,30 @@ const TabPerformance=({m})=>{
         <FunnelLeakTable title="ATC → Checkout Leaks" tooltip={`ATC ≥ 3, sort: ATC DESC\nRate = Checkout / ATC\n🔴 <40%  🟡 40–70%  🟢 >70%`} items={m.funnelATCCheckout} col1="atc" col1label="ATC" rateKey="checkoutRate" rateLabel="Chk%" low={0.40} mid={0.70}/>
       </div>
       <FunnelLeakTable title="Checkout → Purchase Leaks" tooltip={`Checkout ≥ 2, sort: Checkout DESC\nRate = Purchased / Checkout\n🔴 <50%  🟡 50–80%  🟢 >80%`} items={m.funnelCheckoutPurchase} col1="checkout" col1label="Chk" rateKey="purchaseRate" rateLabel="Pur%" low={0.50} mid={0.80}/>
-      <Card title="Brand Performance — Top 10" icon="ti-building-store"
-        tooltip={`Sort: Revenue DESC\nMedian revenue: ${medianUsd}\n⭐ Star: Rev ≥ ${medianUsd} AND Margin ≥ 35%\n💰 Cash Cow: Rev ≥ ${medianUsd} AND Margin < 35%\n💎 Hidden Gem: Rev < ${medianUsd} AND Margin ≥ 35%\n⚠️ At Risk: Rev < ${medianUsd} AND Margin < 35%`}>
-        <Tbl max={10} cols={brandCols} rows={m.brandList}/>
-        {m.allBrands.length>10&&(<button onClick={()=>setShowBrandModal(true)} style={{marginTop:10,fontSize:11,color:T.blue,background:"none",border:`1px solid ${T.blue}33`,borderRadius:6,padding:"3px 10px",cursor:"pointer",fontFamily:FONT}}>+{m.allBrands.length-10} more brands</button>)}
-      </Card>
-      {showBrandModal&&<SearchModal title="All Brands" color={T.blue} allItems={m.allBrands} cols={brandCols} onClose={()=>setShowBrandModal(false)}/>}
-      <Card title="Top Products — Revenue" icon="ti-trophy" tooltip={`Sort: Revenue DESC\nConv Rate = GA4-Purchased / GA4-Sessions`}>
-        <div style={{display:"flex",gap:6,marginBottom:10}}>
-          <SubTab label="By SKU" active={prodView==="sku"} onClick={()=>setProdView("sku")}/>
-          <SubTab label="By Product Name" active={prodView==="product"} onClick={()=>setProdView("product")}/>
-        </div>
-        <Tbl max={10} cols={prodCols} rows={products}/>
-      </Card>
     </>
   );
 };
 
-const TabAds=({m})=>{
+// ── TAB: ADS ──────────────────────────────────────────────────────────────────
+const TabAds=({m,site})=>{
   const [channel,setChannel]=useState("gg");
   const ch=channel;
+  const hasFB=true;
+  const hasGG=site!=="Fur";
 
-  const ggGood=[...m.skuList].filter(p=>p.ggSpend>0&&p.beRoas&&p.ggRoas>=p.beRoas&&p.unitsGG>=1&&p.sessionsGG>=10&&(!p.maxCpa||p.ggCpa<=p.maxCpa)).sort((a,b)=>b.revenueGG-a.revenueGG).slice(0,10);
-  const fbGood=[...m.skuList].filter(p=>p.fbSpend>0&&p.beRoas&&p.fbRoas>=p.beRoas&&p.unitsFB>=1&&p.sessionsFB>=10&&(!p.maxCpa||p.fbCpa<=p.maxCpa)).sort((a,b)=>b.revenueFB-a.revenueFB).slice(0,10);
+  const ggGood=[...m.skuList].filter(p=>p.ggSpend>0&&p.beRoas&&p.ggRoas>=p.beRoas&&p.unitsGG>=2&&p.sessionsGG>=10&&(!p.maxCpa||p.ggCpa<=p.maxCpa)).sort((a,b)=>b.revenueGG-a.revenueGG).slice(0,10);
+  const fbGood=[...m.skuList].filter(p=>p.fbSpend>0&&p.beRoas&&p.fbRoas>=p.beRoas&&p.unitsFB>=2&&p.sessionsFB>=10&&(!p.maxCpa||p.fbCpa<=p.maxCpa)).sort((a,b)=>b.revenueFB-a.revenueFB).slice(0,10);
   const ggWasted=[...m.skuList].filter(p=>p.ggSpend>0&&p.sessionsGG>=10&&(p.beRoas&&p.ggRoas<p.beRoas||(p.maxCpa&&p.ggCpa>p.maxCpa))).sort((a,b)=>b.ggSpend-a.ggSpend).slice(0,10);
   const fbWasted=[...m.skuList].filter(p=>p.fbSpend>0&&p.sessionsFB>=10&&(p.beRoas&&p.fbRoas<p.beRoas||(p.maxCpa&&p.fbCpa>p.maxCpa))).sort((a,b)=>b.fbSpend-a.fbSpend).slice(0,10);
-  const ggScale=[...m.skuList].filter(p=>p.ggSpend>0&&p.beRoas&&p.ggRoas>=p.beRoas&&p.sessionsGG>=10&&p.unitsGG>=1&&p.stock>5&&(p.margin||0)>=0.35&&(!p.maxCpa||p.ggCpa<=p.maxCpa)).sort((a,b)=>b.ggRoas-a.ggRoas).slice(0,10);
-  const fbScale=[...m.skuList].filter(p=>p.fbSpend>0&&p.beRoas&&p.fbRoas>=p.beRoas&&p.sessionsFB>=10&&p.unitsFB>=1&&p.stock>5&&(p.margin||0)>=0.35&&(!p.maxCpa||p.fbCpa<=p.maxCpa)).sort((a,b)=>b.fbRoas-a.fbRoas).slice(0,10);
+  const ggScale=[...m.skuList].filter(p=>p.ggSpend>0&&p.ggRoas>=8&&p.sessionsGG>=10&&p.unitsGG>=2&&p.stock>5&&(p.margin||0)>=0.35&&(!p.maxCpa||p.ggCpa<=p.maxCpa)).sort((a,b)=>b.ggRoas-a.ggRoas).slice(0,10);
+  const fbScale=[...m.skuList].filter(p=>p.fbSpend>0&&p.fbRoas>=8&&p.sessionsFB>=10&&p.unitsFB>=2&&p.stock>5&&(p.margin||0)>=0.35&&(!p.maxCpa||p.fbCpa<=p.maxCpa)).sort((a,b)=>b.fbRoas-a.fbRoas).slice(0,10);
 
-  const chanSwitch=(<div style={{display:"flex",gap:6,marginBottom:10}}><SubTab label="Google Ads" active={ch==="gg"} onClick={()=>setChannel("gg")}/><SubTab label="Facebook Ads" active={ch==="fb"} onClick={()=>setChannel("fb")}/></div>);
+  const chanSwitch=(
+    <div style={{display:"flex",gap:6,marginBottom:10}}>
+      {hasGG&&<SubTab label="Google Ads" active={ch==="gg"} onClick={()=>setChannel("gg")}/>}
+      <SubTab label="Facebook Ads" active={ch==="fb"} onClick={()=>setChannel("fb")}/>
+    </div>
+  );
 
   const adsCols=[
     {k:"name",label:"Product",wrap:true},
@@ -510,43 +662,49 @@ const TabAds=({m})=>{
         <Kpi icon="ti-eye"              label="Total Impressions" value={fNum(m.totalGGImp+m.totalFBImp)} mono/>
         <Kpi icon="ti-device-analytics" label="Ad Sessions"       value={fNum(m.totalSessionsGG+m.totalSessionsFB)} mono/>
       </div>
+
       <Card title="Channel Comparison" icon="ti-chart-bar">
         <div style={{overflowX:"auto"}}>
           <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
             <thead><tr>
               <th style={{padding:"6px 10px",color:T.text2,textAlign:"left",borderBottom:`1px solid ${T.line1}`}}>Metric</th>
-              <th style={{padding:"6px 10px",color:T.cyan,textAlign:"right",borderBottom:`1px solid ${T.line1}`}}>GG (GA4)</th>
-              <th style={{padding:"6px 10px",color:T.blue,textAlign:"right",borderBottom:`1px solid ${T.line1}`}}>GG (Platform)</th>
+              {hasGG&&<><th style={{padding:"6px 10px",color:T.cyan,textAlign:"right",borderBottom:`1px solid ${T.line1}`}}>GG (GA4)</th><th style={{padding:"6px 10px",color:T.blue,textAlign:"right",borderBottom:`1px solid ${T.line1}`}}>GG (Platform)</th></>}
               <th style={{padding:"6px 10px",color:T.orange,textAlign:"right",borderBottom:`1px solid ${T.line1}`}}>FB (GA4)</th>
               <th style={{padding:"6px 10px",color:T.purple,textAlign:"right",borderBottom:`1px solid ${T.line1}`}}>FB (Platform)</th>
             </tr></thead>
             <tbody>
-              {[["Spend",fUsd(m.totalGGSpend),fUsd(m.totalGGSpend),fUsd(m.totalFBSpend),fUsd(m.totalFBSpend)],
-                ["Revenue",fUsd(m.totalRevenueGG),fUsd(m.totalGGValue),fUsd(m.totalRevenueFB),"— soon"],
-                ["ROAS",fX(ggROAS),fX(ggROASP),fX(fbROAS),"— soon"],
-                ["Purchases",fNum(m.totalUnitsGG),fNum(m.totalGGConv),fNum(m.totalUnitsFB),"— soon"],
-                ["CPA",fUsd(ggCPA),fUsd(ggCPAP),fUsd(fbCPA),"— soon"],
-                ["Sessions",fNum(m.totalSessionsGG),"—",fNum(m.totalSessionsFB),"—"],
-                ["Clicks",fNum(m.totalGGClick),fNum(m.totalGGClick),"—",fNum(m.totalFBClicks)],
-                ["Impressions",fNum(m.totalGGImp),fNum(m.totalGGImp),"—",fNum(m.totalFBImp)],
-                ["CTR","—",fPct(ggCTR),"—",fPct(fbCTR)],
-                ["Conv Rate",fPct(ggCRGA4),fPct(ggCRP),fPct(fbCRGA4),"— soon"],
-              ].map(([label,v1,v2,v3,v4],i)=>(
-                <tr key={i} className="row-hover" style={{background:i%2===0?"transparent":T.bg2+"88"}}>
-                  <td style={{padding:"7px 10px",borderBottom:`1px solid ${T.line1}`,color:T.text2,fontWeight:500}}>{label}</td>
-                  {[v1,v2,v3,v4].map((v,j)=>(<td key={j} style={{padding:"7px 10px",borderBottom:`1px solid ${T.line1}`,textAlign:"right",color:v==="—"||v?.includes?.("soon")?T.text2:T.text0,fontFamily:MONO,fontSize:12}}>{v}</td>))}
-                </tr>
-              ))}
+              {[
+                ["Spend",...(hasGG?[fUsd(m.totalGGSpend),fUsd(m.totalGGSpend)]:[]),fUsd(m.totalFBSpend),fUsd(m.totalFBSpend)],
+                ["Revenue",...(hasGG?[fUsd(m.totalRevenueGG),fUsd(m.totalGGValue)]:[]),fUsd(m.totalRevenueFB),"— soon"],
+                ["ROAS",...(hasGG?[fX(ggROAS),fX(ggROASP)]:[]),fX(fbROAS),"— soon"],
+                ["Purchases",...(hasGG?[fNum(m.totalUnitsGG),fNum(m.totalGGConv)]:[]),fNum(m.totalUnitsFB),"— soon"],
+                ["CPA",...(hasGG?[fUsd(ggCPA),fUsd(ggCPAP)]:[]),fUsd(fbCPA),"— soon"],
+                ["Sessions",...(hasGG?[fNum(m.totalSessionsGG),"—"]:[]),fNum(m.totalSessionsFB),"—"],
+                ["Clicks",...(hasGG?[fNum(m.totalGGClick),fNum(m.totalGGClick)]:["—","—"]),fNum(m.totalFBClicks),fNum(m.totalFBClicks)],
+                ["Impressions",...(hasGG?[fNum(m.totalGGImp),fNum(m.totalGGImp)]:["—","—"]),fNum(m.totalFBImp),fNum(m.totalFBImp)],
+                ["CTR",...(hasGG?["—",fPct(ggCTR)]:["—","—"]),"—",fPct(fbCTR)],
+                ["Conv Rate",...(hasGG?[fPct(ggCRGA4),fPct(ggCRP)]:[]),fPct(fbCRGA4),"— soon"],
+              ].map((row,i)=>{
+                const [label,...vals]=row;
+                return(
+                  <tr key={i} className="row-hover" style={{background:i%2===0?"transparent":T.bg2+"88"}}>
+                    <td style={{padding:"7px 10px",borderBottom:`1px solid ${T.line1}`,color:T.text2,fontWeight:500}}>{label}</td>
+                    {vals.map((v,j)=>(<td key={j} style={{padding:"7px 10px",borderBottom:`1px solid ${T.line1}`,textAlign:"right",color:v==="—"||v?.includes?.("soon")?T.text2:T.text0,fontFamily:MONO,fontSize:12}}>{v}</td>))}
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
       </Card>
+
       <Card title="Top Products — Good Ads Performance" icon="ti-trophy"
-        tooltip={`Spend > 0\nROAS ≥ BE ROAS (MAP Price / (MAP Price - Cost))\nPurchases ≥ 1\nSessions ≥ 10\nCPA ≤ Max CPA (MAP Price - Cost)\nSort: Revenue DESC`}>
+        tooltip={`Spend > 0\nROAS ≥ BE ROAS\nPurchases ≥ 2\nSessions ≥ 10\nCPA ≤ Max CPA\nSort: Revenue DESC`}>
         {chanSwitch}<Tbl max={10} cols={adsCols} rows={ch==="gg"?ggGood:fbGood}/>
       </Card>
+
       <Card title="Wasted Spend" icon="ti-flame"
-        tooltip={`Spend > 0 AND Sessions ≥ 10\nAND (ROAS < BE ROAS OR CPA > Max CPA)\nBE ROAS = MAP Price / (MAP Price - Cost)\nMax CPA = MAP Price - Cost\nSort: Spend DESC`}>
+        tooltip={`Spend > 0 AND Sessions ≥ 10\nAND (ROAS < BE ROAS OR CPA > Max CPA)\nSort: Spend DESC`}>
         {chanSwitch}
         <Tbl max={10} cols={[
           {k:"name",label:"Product",wrap:true},
@@ -561,8 +719,9 @@ const TabAds=({m})=>{
           {k:"margin",label:"Margin",r:true,render:p=>fPct(p.margin)},
         ]} rows={ch==="gg"?ggWasted:fbWasted}/>
       </Card>
+
       <Card title="Scale Up Candidates" icon="ti-rocket"
-        tooltip={`Spend > 0\nROAS ≥ BE ROAS\nCPA ≤ Max CPA\nSessions ≥ 10\nPurchases ≥ 1\nStock > 5\nMargin ≥ 35%\nSort: ROAS DESC`}>
+        tooltip={`Spend > 0\nROAS ≥ 8x\nCPA ≤ Max CPA\nSessions ≥ 10\nPurchases ≥ 2\nStock > 5\nMargin ≥ 35%\nSort: ROAS DESC`}>
         {chanSwitch}
         <Tbl max={10} cols={[
           {k:"name",label:"Product",wrap:true},
@@ -582,6 +741,7 @@ const TabAds=({m})=>{
   );
 };
 
+// ── TAB: HEALTH ───────────────────────────────────────────────────────────────
 const TabHealth=({m})=>{
   const slowMoving=[...m.skuList].filter(p=>p.stock>20&&p.units<2).sort((a,b)=>b.stock*b.cost-a.stock*a.cost).slice(0,10);
   const noConvert=[...m.skuList].filter(p=>p.ggSpend>0&&p.beRoas&&p.ggRoas<p.beRoas&&p.sessionsGG>=10).sort((a,b)=>b.ggSpend-a.ggSpend);
@@ -594,7 +754,7 @@ const TabHealth=({m})=>{
   return(
     <>
       <Card title="Product Health Matrix" icon="ti-layout-grid" sub="Revenue vs Margin — median of products with sales"
-        tooltip={`Revenue threshold (median of SKUs with revenue > 0): ${medianUsd}\nMargin threshold: 35%\n\n⭐ Star: Rev ≥ ${medianUsd} AND Margin ≥ 35%\n💰 Cash Cow: Rev ≥ ${medianUsd} AND Margin < 35%\n💎 Hidden Gem: 0 < Rev < ${medianUsd} AND Margin ≥ 35%\n⚠️ At Risk: 0 < Rev < ${medianUsd} AND Margin < 35%\n🚫 No Sales Yet: Revenue = 0`}>
+        tooltip={`Revenue threshold: ${medianUsd}\nMargin threshold: 35%\n\n⭐ Star: Rev ≥ ${medianUsd} AND Margin ≥ 35%\n💰 Cash Cow: Rev ≥ ${medianUsd} AND Margin < 35%\n💎 Hidden Gem: 0 < Rev < ${medianUsd} AND Margin ≥ 35% AND Units ≥ 3\n⚠️ At Risk: 0 < Rev < ${medianUsd} AND Margin < 35%\n🚫 No Sales Yet: Revenue = 0`}>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
           <QuadCard label="star"    count={quad.star.length}    items={quad.star}/>
           <QuadCard label="cashcow" count={quad.cashcow.length} items={quad.cashcow}/>
@@ -647,10 +807,11 @@ const TabHealth=({m})=>{
   );
 };
 
+// ── TAB: INVENTORY ────────────────────────────────────────────────────────────
 const TabInventory=({m,range})=>{
   const [showStockModal,setShowStockModal]=useState(false);
   const now=new Date();
-  const days=range==="MTD"?now.getDate():range==="Last 30D"?30:range==="Last Month"?30:Math.floor((now-new Date(now.getFullYear(),0,1))/86400000);
+  const days=range==="MTD"?now.getDate():30;
   const inStock=m.skuList.filter(p=>p.stock>0).length;
   const outStock=m.skuList.filter(p=>p.stock<=0).length;
   const lowStock=m.skuList.filter(p=>p.stock>0&&p.stock<=5).length;
@@ -695,49 +856,65 @@ const TabInventory=({m,range})=>{
         </div>
       </Card>
       <Card title="Stock vs Sales" icon="ti-arrows-exchange" tooltip={`Days of Stock = Stock / (Units / ${days} days)\nSort: Stock Value DESC`}>
-        <Tbl max={20} cols={stockVsCols} rows={stockVsSales}/>
-        {stockVsSales.length>20&&(<button onClick={()=>setShowStockModal(true)} style={{marginTop:10,fontSize:11,color:T.blue,background:"none",border:`1px solid ${T.blue}33`,borderRadius:6,padding:"3px 10px",cursor:"pointer",fontFamily:FONT}}>+{stockVsSales.length-20} more</button>)}
+        <Tbl max={20} cols={stockVsCols} rows={stockVsSales} showMore allRows={stockVsSales} modalTitle="Stock vs Sales" modalColor={T.blue}/>
       </Card>
-      {showStockModal&&<SearchModal title="Stock vs Sales" color={T.blue} allItems={stockVsSales} cols={stockVsCols} onClose={()=>setShowStockModal(false)}/>}
     </>
   );
 };
 
-const TABS=[{k:"performance",label:"Performance",icon:"ti-chart-line"},{k:"ads",label:"Ads",icon:"ti-ad-2"},{k:"health",label:"Product Health",icon:"ti-heart-rate"},{k:"inventory",label:"Inventory",icon:"ti-package"}];
+// ── MAIN ──────────────────────────────────────────────────────────────────────
+const TABS=[{k:"overview",label:"Overview",icon:"ti-chart-line"},{k:"ads",label:"Ads",icon:"ti-ad-2"},{k:"health",label:"Product Health",icon:"ti-heart-rate"},{k:"inventory",label:"Inventory",icon:"ti-package"}];
 const RANGES=["MTD","Last 30D","Last Month","YTD"];
 
 export default function App() {
   const [authed,setAuthed]=useState(!!localStorage.getItem("rc_authed"));
-  const [hasUrl,setHasUrl]=useState(true);
+  const [rawRows,setRawRows]=useState(null);
+  const [site,setSite]=useState("all");
   const [metrics,setMetrics]=useState(null);
-  const [tab,setTab]=useState("performance");
+  const [tab,setTab]=useState("overview");
   const [range,setRange]=useState("MTD");
   const [syncing,setSyncing]=useState(false);
   const [lastSync,setLastSync]=useState(null);
   const timerRef=useRef(null);
-  const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxG9t2h7Wl-EzTFGWJP7P9NvRZ--H05TMmxuwwafNgMCm-9vPy7CrMIJImwqukDKwZE/exec";
+
   const handleAuth=()=>{localStorage.setItem("rc_authed","1");setAuthed(true);};
-  const handleLoad=useCallback((url,text)=>{
+
+  const parseAndSet=useCallback((text,currentSite)=>{
     try{
       let rows=[];
       try{const json=JSON.parse(text);if(json.error){console.error(json.error);return;}if(json.rows&&Array.isArray(json.rows))rows=json.rows;}catch(e){rows=parseCSV(text);}
       if(!rows.length) return;
-      const cols=detectCols(Object.keys(rows[0]));
-      setMetrics(compute(rows,cols));
+      setRawRows(rows);
+      setMetrics(compute(rows,currentSite));
       setLastSync(new Date());
     }catch(e){console.error("Parse error:",e);}
-    setHasUrl(true);
   },[]);
+
+  // Recompute when site changes (no refetch needed)
+  useEffect(()=>{
+    if(rawRows) setMetrics(compute(rawRows,site));
+  },[rawRows,site]);
+
   const refresh=useCallback(async()=>{
-    const url=APPS_SCRIPT_URL;
-    if(!url) return;
     setSyncing(true);
-    try{const rp=range==="MTD"?"mtd":range==="Last 30D"?"last30":range==="Last Month"?"lastmonth":"ytd";const res=await fetch(`${url}?range=${rp}`);const text=await res.text();handleLoad(url,text);}catch(e){console.error(e);}
+    try{
+      const rp=range==="MTD"?"mtd":range==="Last 30D"?"last30":range==="Last Month"?"lastmonth":"ytd";
+      const res=await fetch(`${APPS_SCRIPT_URL}?range=${rp}`);
+      const text=await res.text();
+      parseAndSet(text,site);
+    }catch(e){console.error(e);}
     setSyncing(false);
-  },[handleLoad,range]);
-  useEffect(()=>{if(authed&&hasUrl&&!metrics)refresh();},[authed,hasUrl,metrics,refresh]);
-  useEffect(()=>{if(!authed||!hasUrl)return;timerRef.current=setInterval(refresh,30000);return()=>clearInterval(timerRef.current);},[authed,hasUrl,refresh]);
+  },[parseAndSet,range,site]);
+
+  useEffect(()=>{if(authed&&!rawRows)refresh();},[authed,rawRows,refresh]);
+  useEffect(()=>{
+    if(!authed)return;
+    timerRef.current=setInterval(refresh,30000);
+    return()=>clearInterval(timerRef.current);
+  },[authed,refresh]);
+
   if(!authed) return <PasswordScreen onAuth={handleAuth}/>;
+
   return(
     <>
       <style>{css}</style>
@@ -748,26 +925,44 @@ export default function App() {
             <div style={{fontSize:11,color:T.text2}}>{lastSync?`Last sync ${lastSync.toLocaleTimeString()}`:"Loading..."}</div>
           </div>
           <div style={{display:"flex",alignItems:"center",gap:8}}>
+            {/* Website filter */}
+            <div style={{display:"flex",gap:4,background:T.bg2,borderRadius:8,padding:"3px",border:`1px solid ${T.line1}`}}>
+              {SITES.map(s=>(
+                <button key={s.key} onClick={()=>setSite(s.key)} style={{
+                  padding:"4px 12px",fontSize:11,fontFamily:FONT,borderRadius:6,cursor:"pointer",
+                  border:"none",transition:"all .15s",
+                  background:site===s.key?T.blue:"transparent",
+                  color:site===s.key?"#fff":T.text2,
+                  fontWeight:site===s.key?600:400,
+                }}>{s.label}</button>
+              ))}
+            </div>
+            {/* Range selector */}
             <div style={{display:"flex",gap:4}}>
               {RANGES.map(r=>{const av=r==="MTD";return(<button key={r} onClick={()=>av&&setRange(r)} style={{padding:"5px 12px",fontSize:11,fontFamily:FONT,borderRadius:6,cursor:av?"pointer":"not-allowed",border:`1px solid ${range===r?T.blue:T.line1}`,background:range===r?T.blue+"22":"transparent",color:range===r?T.blue:T.text2,opacity:av?1:0.35,transition:"all .15s"}}>{r}{!av?" 🔒":""}</button>);})}
             </div>
             <button onClick={refresh} disabled={syncing} style={{padding:"5px 12px",fontSize:11,fontFamily:FONT,borderRadius:6,border:`1px solid ${T.line1}`,background:"transparent",color:T.text2,cursor:"pointer"}}><i className={`ti ${syncing?"ti-loader-2":"ti-refresh"}`} style={{fontSize:13}}/></button>
-
           </div>
         </div>
+
         <div style={{display:"flex",gap:6,marginBottom:14,flexWrap:"wrap"}}>
-          {TABS.map(t=><NavTab key={t.k} label={t.label} icon={t.icon} active={tab===t.k} onClick={()=>setTab(t.k)}/>)}
+          {TABS.map(t=>(
+            <button key={t.k} onClick={()=>setTab(t.k)} className="tab-btn" style={{display:"flex",alignItems:"center",gap:6,padding:"7px 14px",fontSize:12,fontFamily:FONT,borderRadius:8,border:`1px solid ${tab===t.k?T.blue:T.line1}`,cursor:"pointer",background:tab===t.k?T.blue:"transparent",color:tab===t.k?"#fff":T.text1,transition:"all .15s"}}>
+              <i className={`ti ${t.icon}`} style={{fontSize:13}}/>{t.label}
+            </button>
+          ))}
         </div>
+
         {!metrics?(
           <div style={{textAlign:"center",padding:"4rem",color:T.text2}}>
             <i className="ti ti-loader-2" style={{fontSize:32,display:"block",marginBottom:8,opacity:.4}}/><div>Loading data...</div>
           </div>
         ):(
           <div className="fade">
-            {tab==="performance"&&<TabPerformance m={metrics}/>}
-            {tab==="ads"&&<TabAds m={metrics}/>}
-            {tab==="health"&&<TabHealth m={metrics}/>}
-            {tab==="inventory"&&<TabInventory m={metrics} range={range}/>}
+            {tab==="overview"  &&<TabOverview m={metrics}/>}
+            {tab==="ads"       &&<TabAds m={metrics} site={site}/>}
+            {tab==="health"    &&<TabHealth m={metrics}/>}
+            {tab==="inventory" &&<TabInventory m={metrics} range={range}/>}
           </div>
         )}
       </div>
