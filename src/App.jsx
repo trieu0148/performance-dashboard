@@ -532,6 +532,187 @@ const PasswordScreen=({onAuth})=>{
   return(<div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:T.bg0}}><div style={{background:T.bg1,border:`1px solid ${T.line1}`,borderRadius:16,padding:"40px 48px",width:340,textAlign:"center"}}><i className="ti ti-lock" style={{fontSize:32,color:T.blue,marginBottom:16,display:"block"}}/><div style={{fontSize:18,fontWeight:700,color:T.text0,marginBottom:6}}>RC Performance Dashboard</div><div style={{fontSize:12,color:T.text2,marginBottom:24}}>Enter password to continue</div><input type="password" value={val} onChange={e=>setVal(e.target.value)} onKeyDown={e=>e.key==="Enter"&&submit()} placeholder="Password" autoFocus style={{width:"100%",padding:"10px 14px",borderRadius:8,border:`1px solid ${err?T.red:T.line2}`,background:T.bg2,color:T.text0,fontSize:14,fontFamily:FONT,outline:"none",marginBottom:12}}/>{err&&<div style={{fontSize:12,color:T.red,marginBottom:8}}>Incorrect password</div>}<button onClick={submit} style={{width:"100%",padding:"10px",borderRadius:8,background:T.blue,color:"#fff",border:"none",fontSize:13,fontFamily:FONT,fontWeight:600,cursor:"pointer"}}>Unlock</button></div></div>);
 };
 
+// ── Top Wasted Budget by Brand ───────────────────────────────────────────────
+const TopWastedByBrand=({m})=>{
+  const brandMap={};
+  m.skuList.forEach(p=>{
+    const k=p.brand||"Unknown";
+    if(!brandMap[k]) brandMap[k]={name:k,adSpend:0,adRevenue:0,units:0};
+    const b=brandMap[k];
+    b.adSpend+=p.adSpend; b.adRevenue+=p.adRevenue; b.units+=p.unitsGG+p.unitsFB;
+  });
+  const brands=Object.values(brandMap)
+    .filter(b=>b.adSpend>0)
+    .map(b=>({...b,roas:b.adSpend>0?b.adRevenue/b.adSpend:null,waste:b.adSpend-b.adRevenue}))
+    .filter(b=>b.waste>0)
+    .sort((a,b_)=>b_.waste-a.waste)
+    .slice(0,10);
+  if(!brands.length) return null;
+  return(
+    <Card title="Top Wasted Budget by Brand" icon="ti-flame"
+      tooltip={`Brands where Ad Spend > Ad Revenue (GA4)
+Waste = Ad Spend - Ad Revenue
+Sort: Waste DESC`}>
+      <Tbl max={10} cols={[
+        {k:"name",label:"Brand",render:p=><span style={{fontWeight:600}}>{p.name}</span>},
+        {k:"adSpend",label:"Ad Spend",r:true,render:p=>fUsd(p.adSpend)},
+        {k:"adRevenue",label:"Ad Revenue",r:true,render:p=>fUsd(p.adRevenue)},
+        {k:"waste",label:"Wasted",r:true,render:p=><span style={{color:T.red,fontWeight:600}}>{fUsd(p.waste)}</span>},
+        {k:"roas",label:"ROAS",r:true,render:p=><span style={{color:T.red}}>{fX(p.roas)}</span>},
+        {k:"units",label:"Purchases",r:true,render:p=>fNum(p.units)},
+      ]} rows={brands}/>
+    </Card>
+  );
+};
+
+// ── ROAS vs BE ROAS Visualization ────────────────────────────────────────────
+const ROASComparison=({m,channel})=>{
+  const ch=channel||"gg";
+  const items=[...m.skuList]
+    .filter(p=>{
+      const spend=ch==="gg"?p.ggSpend:p.fbSpend;
+      return spend>0&&p.beRoas!=null;
+    })
+    .map(p=>{
+      const roas=ch==="gg"?p.ggRoas:p.fbRoas;
+      const gap=roas!=null?(roas-p.beRoas):null;
+      return {...p,channelRoas:roas,gap};
+    })
+    .sort((a,b)=>(b.gap||0)-(a.gap||0))
+    .slice(0,15);
+  if(!items.length) return null;
+  const maxRoas=Math.max(...items.map(p=>Math.max(p.channelRoas||0,p.beRoas||0)),1);
+  return(
+    <Card title={`ROAS vs Break-even ROAS — ${ch==="gg"?"Google Ads":"Facebook Ads"}`} icon="ti-chart-bar"
+      tooltip={`Blue bar = Actual ROAS
+Orange line = Break-even ROAS (MAP Price / (MAP Price - Cost))
+Green = above break-even ✅
+Red = below break-even ❌`}>
+      <div style={{display:"flex",flexDirection:"column",gap:6}}>
+        {items.map((p,i)=>{
+          const pct=maxRoas>0?((p.channelRoas||0)/maxRoas)*100:0;
+          const bePct=maxRoas>0?((p.beRoas||0)/maxRoas)*100:0;
+          const good=(p.channelRoas||0)>=(p.beRoas||0);
+          return(
+            <div key={i} style={{display:"flex",alignItems:"center",gap:8}}>
+              <div style={{width:130,fontSize:10,color:T.text1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",flexShrink:0}}>{p.name||p.sku}</div>
+              <div style={{flex:1,height:16,background:T.bg3,borderRadius:4,position:"relative",overflow:"visible"}}>
+                <div style={{width:`${pct}%`,height:"100%",background:good?T.green:T.red,borderRadius:4,opacity:.8,transition:"width .5s"}}/>
+                <div style={{position:"absolute",top:-2,bottom:-2,left:`${bePct}%`,width:2,background:T.yellow,borderRadius:1}}/>
+              </div>
+              <div style={{width:45,textAlign:"right",fontSize:11,fontFamily:MONO,color:good?T.green:T.red,fontWeight:600}}>{fX(p.channelRoas)}</div>
+              <div style={{width:45,textAlign:"right",fontSize:10,color:T.text2,fontFamily:MONO}}>BE:{fX(p.beRoas)}</div>
+            </div>
+          );
+        })}
+        <div style={{display:"flex",alignItems:"center",gap:12,marginTop:6,fontSize:10,color:T.text2}}>
+          <span style={{display:"flex",alignItems:"center",gap:4}}><span style={{width:12,height:8,background:T.green,borderRadius:2,display:"inline-block"}}/> Above BE ROAS</span>
+          <span style={{display:"flex",alignItems:"center",gap:4}}><span style={{width:12,height:8,background:T.red,borderRadius:2,display:"inline-block"}}/> Below BE ROAS</span>
+          <span style={{display:"flex",alignItems:"center",gap:4}}><span style={{width:2,height:12,background:T.yellow,display:"inline-block"}}/> Break-even line</span>
+        </div>
+      </div>
+    </Card>
+  );
+};
+
+// ── Price Elasticity ──────────────────────────────────────────────────────────
+const PriceElasticity=({m})=>{
+  const items=[...m.skuList]
+    .filter(p=>p.sessions>=10&&p.margin!=null&&p.margin>=0.35&&p.price>0)
+    .map(p=>({...p,pricePerMargin:p.price*(p.margin||0)}))
+    .sort((a,b)=>(a.convRate||0)-(b.convRate||0))
+    .slice(0,15);
+  if(!items.length) return null;
+  return(
+    <Card title="Price Elasticity — High Margin, Low Conversion" icon="ti-trending-down"
+      tooltip={`Products with Margin ≥ 35% AND Sessions ≥ 10 BUT low Conv Rate
+May be overpriced relative to perceived value
+Sort: Conv Rate ASC (worst first)`}>
+      <Tbl max={15} cols={[
+        {k:"name",label:"Product",wrap:true},
+        {k:"price",label:"MAP Price",r:true,render:p=>fUsd(p.price)},
+        {k:"margin",label:"Margin",r:true,render:p=><span style={{color:T.green}}>{fPct(p.margin)}</span>},
+        {k:"sessions",label:"Sessions",r:true,render:p=>fNum(p.sessions)},
+        {k:"convRate",label:"Conv Rate",r:true,render:p=><span style={{color:T.red,fontWeight:600}}>{fPct(p.convRate)}</span>},
+        {k:"atcRate",label:"ATC Rate",r:true,render:p=>fPct(p.atcRate)},
+        {k:"revenue",label:"Revenue",r:true,render:p=>fUsd(p.revenue)},
+        {k:"units",label:"Units",r:true,render:p=>fNum(p.units)},
+      ]} rows={items}/>
+    </Card>
+  );
+};
+
+// ── Stockout Impact ───────────────────────────────────────────────────────────
+const StockoutImpact=({m})=>{
+  const avgConvRate=m.convRate||0.016;
+  const avgOrderValue=m.totalUnits>0?m.totalRevenue/m.totalUnits:0;
+  const items=[...m.skuList]
+    .filter(p=>p.stock<=0&&p.sessions>0)
+    .map(p=>({...p,
+      estimatedRevLost:p.sessions*avgConvRate*avgOrderValue,
+    }))
+    .sort((a,b)=>b.estimatedRevLost-a.estimatedRevLost)
+    .slice(0,15);
+  const totalLost=items.reduce((s,p)=>s+p.estimatedRevLost,0);
+  if(!items.length) return null;
+  return(
+    <Card title="Stockout Impact — Estimated Revenue Lost" icon="ti-alert-circle"
+      tooltip={`Products with Stock ≤ 0 AND Sessions > 0
+Est. Revenue Lost = Sessions × Avg Conv Rate × Avg Order Value
+Avg Conv Rate: ${fPct(avgConvRate)} | Avg Order Value: ${fUsd(avgOrderValue)}
+Sort: Est. Lost DESC`}
+      sub={`Total estimated lost: ${fUsd(totalLost)}`}>
+      <Tbl max={15} cols={[
+        {k:"name",label:"Product",wrap:true},
+        {k:"sessions",label:"Sessions",r:true,render:p=>fNum(p.sessions)},
+        {k:"stock",label:"Stock",r:true,render:p=><span style={{color:T.red}}>{fNum(p.stock)}</span>},
+        {k:"estimatedRevLost",label:"Est. Rev Lost",r:true,render:p=><span style={{color:T.red,fontWeight:600}}>{fUsd(p.estimatedRevLost)}</span>},
+        {k:"price",label:"MAP Price",r:true,render:p=>fUsd(p.price)},
+        {k:"margin",label:"Margin",r:true,render:p=>fPct(p.margin)},
+      ]} rows={items}/>
+    </Card>
+  );
+};
+
+// ── Overstock Alert ───────────────────────────────────────────────────────────
+const OverstockAlert=({m,days})=>{
+  const items=[...m.skuList]
+    .filter(p=>p.stock>0&&p.units>0)
+    .map(p=>{
+      const dailyRate=p.units/days;
+      const daysLeft=dailyRate>0?Math.round(p.stock/dailyRate):Infinity;
+      return {...p,daysLeft,stockValue:p.stock*p.cost};
+    })
+    .filter(p=>p.daysLeft>180&&isFinite(p.daysLeft))
+    .sort((a,b)=>b.stockValue-a.stockValue)
+    .slice(0,15);
+  if(!items.length) return(
+    <Card title="Overstock Alert" icon="ti-packages">
+      <div style={{textAlign:"center",padding:"1.5rem",color:T.green,fontSize:13}}>
+        <i className="ti ti-check" style={{fontSize:24,display:"block",marginBottom:6}}/>No overstock detected ✅
+      </div>
+    </Card>
+  );
+  const totalOverstockVal=items.reduce((s,p)=>s+p.stockValue,0);
+  return(
+    <Card title="Overstock Alert — Days of Stock > 180" icon="ti-packages"
+      tooltip={`Products selling too slowly relative to stock level
+Days of Stock = Stock / (Units sold / ${days} days)
+Overstock threshold: > 180 days
+Sort: Stock Value DESC`}
+      sub={`Total overstock value: ${fUsd(totalOverstockVal)}`}>
+      <Tbl max={15} cols={[
+        {k:"name",label:"Product",wrap:true},
+        {k:"stock",label:"Stock",r:true,render:p=>fNum(p.stock)},
+        {k:"units",label:"Units Sold",r:true,render:p=>fNum(p.units)},
+        {k:"stockValue",label:"Stock Value",r:true,render:p=>fUsd(p.stockValue)},
+        {k:"daysLeft",label:"Days of Stock",r:true,render:p=><span style={{color:p.daysLeft>365?T.red:T.orange,fontWeight:600}}>{fNum(p.daysLeft)}d</span>},
+        {k:"margin",label:"Margin",r:true,render:p=>fPct(p.margin)},
+      ]} rows={items}/>
+    </Card>
+  );
+};
+
 // ── TAB: OVERVIEW ─────────────────────────────────────────────────────────────
 // ── Revenue by Website Bar Chart ─────────────────────────────────────────────
 const RevenueByWebsite=({rawRows})=>{
@@ -730,6 +911,8 @@ const TabOverview=({m,site,rawRows})=>{
         <Tbl max={10} cols={brandCols} rows={m.brandList} showMore allRows={m.allBrands} modalTitle="All Brands" modalColor={T.blue}/>
       </Card>
 
+      <MarginAnalysis m={m}/>
+
       <Card title="Top Products — Revenue" icon="ti-trophy" tooltip={`Sort: Revenue DESC\nConv Rate = GA4-Purchased / GA4-Sessions`}>
         <div style={{display:"flex",gap:6,marginBottom:10}}>
           <SubTab label="By SKU" active={prodView==="sku"} onClick={()=>setProdView("sku")}/>
@@ -738,7 +921,8 @@ const TabOverview=({m,site,rawRows})=>{
         <Tbl max={10} cols={prodCols} rows={products} showMore allRows={products} modalTitle="All Products" modalColor={T.blue}/>
       </Card>
 
-      {/* Funnel BELOW */}
+      {/* Funnel BELOW — hidden in All mode */}
+      {site!=="all"&&<>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:12,marginBottom:0}}>
         <Card title="Overall Funnel" icon="ti-funnel" sub="Sessions → ATC → Checkout → Purchase">
           <FunnelViz sessions={m.totalSessions} atc={m.totalATC} checkout={m.totalCheckout} units={m.totalUnits}/>
@@ -747,6 +931,7 @@ const TabOverview=({m,site,rawRows})=>{
         <FunnelLeakTable title="ATC → Checkout Leaks" tooltip={`ATC ≥ 3, sort: ATC DESC\nRate = Checkout / ATC\n🔴 <40%  🟡 40–70%  🟢 >70%`} items={m.funnelATCCheckout} col1="atc" col1label="ATC" rateKey="checkoutRate" rateLabel="Chk%" low={0.40} mid={0.70}/>
       </div>
       <FunnelLeakTable title="Checkout → Purchase Leaks" tooltip={`Checkout ≥ 2, sort: Checkout DESC\nRate = Purchased / Checkout\n🔴 <50%  🟡 50–80%  🟢 >80%`} items={m.funnelCheckoutPurchase} col1="checkout" col1label="Chk" rateKey="purchaseRate" rateLabel="Pur%" low={0.50} mid={0.80}/>
+      </>}
     </>
   );
 };
@@ -820,6 +1005,8 @@ const TabAds=({m,site})=>{
         <Kpi icon="ti-eye"              label="Total Impressions" value={fNum(m.totalGGImp+m.totalFBImp)} mono/>
         <Kpi icon="ti-device-analytics" label="Ad Sessions"       value={fNum(m.totalSessionsGG+m.totalSessionsFB)} mono/>
       </div>
+
+      <BudgetAllocation m={m}/>
 
       <Card title="Channel Comparison" icon="ti-chart-bar">
         <div style={{overflowX:"auto"}}>
@@ -906,7 +1093,9 @@ const TabAds=({m,site})=>{
           {k:"margin",label:"Margin",r:true,render:p=>fPct(p.margin)},
         ]} rows={ch==="gg"?ggScale:fbScale}/>
       </Card>
-      <BudgetAllocation m={m}/>
+
+      <ROASComparison m={m} channel={channel}/>
+      <TopWastedByBrand m={m}/>
     </>
   );
 };
@@ -973,8 +1162,8 @@ const TabHealth=({m})=>{
           {k:"action",label:"Action",render:p=>{const a=getAction(p);return <span style={{fontSize:11,color:a.color}}>{a.icon} {a.text}</span>;}},
         ]} rows={section3}/>
       </Card>
-      <MarginAnalysis m={m}/>
       <MAPCompliance m={m}/>
+      <PriceElasticity m={m}/>
     </>
   );
 };
@@ -1032,6 +1221,9 @@ const TabInventory=({m,range})=>{
       <Card title="Stock vs Sales" icon="ti-arrows-exchange" tooltip={`Days of Stock = Stock / (Units / ${days} days)\nSort: Stock Value DESC`}>
         <Tbl max={20} cols={stockVsCols} rows={stockVsSales} showMore allRows={stockVsSales} modalTitle="Stock vs Sales" modalColor={T.blue}/>
       </Card>
+
+      <StockoutImpact m={m}/>
+      <OverstockAlert m={m} days={days}/>
     </>
   );
 };
